@@ -165,6 +165,9 @@ namespace Editor
         m_Code->BuildScripts = [this] { BuildCSharp(); };
         m_Code->BuildState = [this] { return m_CSharpBuild ? m_CSharpBuild->load() : 0; };
         m_Code->Language = [this] { return m_Language.get(); };
+        m_Debug = MakeScope<Dimension::DebugSession>();
+        m_Code->Debugger = [this] { return m_Debug.get(); };
+        m_Code->StartDebugging = [this] { StartDebugging(); };
         m_Ctx.DrawModelModifiers = [this](Entity e) { m_MeshEdit->DrawModifierPanel(e); };
         m_Ctx.OnFileRestored = [this](const fs::path& file) { m_MeshEdit->OnFileRestored(file); };
         m_Packages = MakeScope<PackagesPanel>(m_Ctx);
@@ -817,6 +820,7 @@ namespace Editor
         ApplyPendingLayout();
         PollGameModule(dt);
         PollCSharp(dt);
+        UpdateDebugger();
         Autosave(dt);
         // Scene visibility follows the scene file: loaded when another opens, saved when it changes.
         {
@@ -6425,6 +6429,75 @@ namespace Editor
         }).detach();
     }
 
+    // ---- Code Mode's C# debugger
+
+    void EditorLayer::StartDebugging()
+    {
+        if (!m_Debug || m_Debug->IsActive()) return;
+        auto note = [&](const std::string& text) {
+            Log::Warn("{}", text);
+            if (m_Code) m_Code->Note(text);
+        };
+        if (!CSharpRuntime::IsAvailable()) return note("C# scripting is off: nothing to debug");
+        fs::path debugger = ExecutableDirectory() / "netcoredbg" / Dimension::Platform::ExecutableName("netcoredbg");
+        if (!fs::exists(debugger)) return note("The C# debugger (netcoredbg) is not installed beside the editor");
+        if (m_Ctx.IsPlaying()) Stop();
+        if (m_Ctx.ScenePath.empty()) return note("Save the scene first: the debugged game runs the saved scene");
+        if (m_Ctx.Dirty && !SaveScene()) return;
+        if (m_Code) m_Code->SaveAll();
+        // The scripts as they are now (built first when they changed).
+        fs::path project = Project::GetDirectory();
+        std::error_code ec;
+        fs::path dll = CSharpProject::AssemblyPath(project);
+        bool stale = !fs::exists(dll) || fs::last_write_time(dll, ec) < CSharpProject::LatestSourceTime(project);
+        if ((m_CSharpBuild && m_CSharpBuild->load() == 1) || stale)
+        {
+            m_DebugAfterBuild = true;
+            if (!m_CSharpBuild || m_CSharpBuild->load() != 1) BuildCSharp();
+            if (m_Code) m_Code->Note("Building the scripts, then debugging...");
+            return;
+        }
+        LaunchDebugger();
+    }
+
+    void EditorLayer::LaunchDebugger()
+    {
+        fs::path project = Project::GetDirectory();
+        fs::path player = ExecutableDirectory() / Dimension::Platform::ExecutableName("DimensionPlayer");
+        if (!fs::exists(player)) player = ExecutableDirectory() / Dimension::Platform::ExecutableName("DimensionGame");
+        Dimension::DebugSession::Options options;
+        options.Debugger = ExecutableDirectory() / "netcoredbg" / Dimension::Platform::ExecutableName("netcoredbg");
+        options.Player = player;
+        options.WorkingDir = ExecutableDirectory();
+        options.GateFile = project / ".dimension" / "DebugGate";
+        auto utf8 = [](const fs::path& p) {
+            std::u8string s = p.u8string();
+            return std::string(s.begin(), s.end());
+        };
+        options.PlayerArgs = { utf8(project), "--scene", utf8(m_Ctx.ScenePath), "--wait-for-debugger", "--debug-gate", utf8(options.GateFile) };
+        if (m_Debug->Start(options)) Log::Info("Debugging {} in a game window", m_Ctx.ScenePath.filename().string());
+        else if (m_Code) m_Code->Note(m_Debug->Error());
+    }
+
+    void EditorLayer::UpdateDebugger()
+    {
+        if (!m_Debug) return;
+        if (m_LaunchDebuggerNext)
+        {
+            m_LaunchDebuggerNext = false;
+            LaunchDebugger();
+        }
+        m_Debug->Update();
+        // Stopped in the game: the editor comes forward, in Code Mode at the place.
+        if (m_Debug->GetState() == Dimension::DebugSession::State::Stopped && !m_Debug->Frames().empty() && m_Debug->StopCount() != m_DebugStopSeen)
+        {
+            m_DebugStopSeen = m_Debug->StopCount();
+            const auto& f = m_Debug->Frames()[(size_t)m_Debug->SelectedFrame()];
+            if (m_Code && !m_Code->IsActive() && !f.File.empty()) m_Ctx.RequestOpenScript = f.File;
+            Application::Get().GetWindow().Focus();
+        }
+    }
+
     void EditorLayer::PollCSharp(float dt)
     {
         if (!CSharpRuntime::IsAvailable()) return;
@@ -6450,6 +6523,12 @@ namespace Editor
         if (m_CSharpBuild)
         {
             int state = m_CSharpBuild->load();
+            if ((state == 2 || state == 3) && m_DebugAfterBuild)
+            {
+                m_DebugAfterBuild = false;
+                if (state == 2) m_LaunchDebuggerNext = true;
+                else if (m_Code) m_Code->Note("The scripts have errors: fix them to debug");
+            }
             if ((state == 2 || state == 3) && m_Code && m_CSharpDiagnostics)
             {
                 // To Code Mode: squiggles under them and its Problems list.

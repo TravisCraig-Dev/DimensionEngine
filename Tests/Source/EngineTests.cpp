@@ -79,6 +79,7 @@
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Scripting/LanguageService.h>
+#include <Dimension/Debugger/DebugSession.h>
 #include <Dimension/Scripting/ManagedBuild.h>
 #include <Dimension/Scripting/CSharpProject.h>
 #include <Dimension/Platform/AppIcon.h>
@@ -22074,6 +22075,85 @@ namespace
         fs::remove_all(project, ec);
     }
 
+    void TestCodeDebugger()
+    {
+        // DAP framing: whole messages taken off a stream that arrives in pieces.
+        std::string stream = DebugSession::FrameMessage(R"({"a":1})") + DebugSession::FrameMessage(R"({"b":"two"})");
+        std::string buffer = stream.substr(0, 10), message;
+        CHECK(!DebugSession::UnframeMessage(buffer, message));
+        buffer += stream.substr(10);
+        CHECK(DebugSession::UnframeMessage(buffer, message) && message == R"({"a":1})");
+        CHECK(DebugSession::UnframeMessage(buffer, message) && message == R"({"b":"two"})" && buffer.empty());
+
+        // The Sandbox in a player with the debugger attached: a breakpoint in Spinner.OnUpdate.
+        fs::path bin = ExecutableDir();
+        fs::path debugger = bin / "netcoredbg" / Dimension::Platform::ExecutableName("netcoredbg");
+        fs::path player = bin / Dimension::Platform::ExecutableName("DimensionPlayer");
+        fs::path project = fs::path(DIM_SOURCE_DIR) / "Projects" / "Sandbox";
+        fs::path script = project / "Scripts" / "Spinner.cs";
+        if (!fs::exists(debugger) || !fs::exists(player) || !fs::exists(project / ".dimension" / "ScriptAssemblies" / "GameScripts.pdb"))
+        {
+            std::printf("  skipped: netcoredbg, the player or the Sandbox's compiled scripts not available\n");
+            return;
+        }
+        DebugSession session;
+        session.SetBreakpoints(script, { 28 }); // m_Time += dt;
+        DebugSession::Options options;
+        options.Debugger = debugger;
+        options.Player = player;
+        options.GateFile = fs::temp_directory_path() / "dim_debug_gate_test";
+        options.PlayerArgs = { project.string(), "--wait-for-debugger", "--debug-gate", options.GateFile.string(), "--no-vsync" };
+        options.WorkingDir = bin;
+        CHECK(session.Start(options));
+        auto until = [&](auto done, double seconds) {
+            auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+            while (std::chrono::steady_clock::now() < end)
+            {
+                session.Update();
+                if (done()) return true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            return false;
+        };
+        auto stoppedWithFrames = [&] { return session.GetState() == DebugSession::State::Stopped && !session.Frames().empty(); };
+        bool stopped = until(stoppedWithFrames, 60.0);
+        CHECK(stopped);
+        if (!stopped)
+        {
+            for (auto& line : session.Output()) std::printf("  | %s\n", line.c_str());
+            session.Stop();
+            return;
+        }
+        CHECK(session.StopReason() == "breakpoint" && session.IsVerified(script, 28));
+        const auto& top = session.Frames()[(size_t)session.SelectedFrame()];
+        CHECK(top.File.filename() == "Spinner.cs" && top.Line == 28 && top.Name.find("Spinner.OnUpdate") != std::string::npos);
+        // Its locals: "this" and the parameter.
+        auto hasLocal = [&](const char* name) {
+            for (auto& scope : session.Scopes())
+                for (auto& v : scope.Children)
+                    if (v.Name == name) return true;
+            return false;
+        };
+        CHECK(until([&] { return hasLocal("dt") && hasLocal("this"); }, 10.0));
+        std::string value;
+        session.Evaluate("dt > 0", "watch", [&](bool ok, const std::string& v, const std::string&, int) { value = ok ? v : "error: " + v; });
+        CHECK(until([&] { return !value.empty(); }, 10.0) && value == "true");
+        // A step: the next line.
+        uint64_t stops = session.StopCount();
+        session.StepOver();
+        CHECK(until([&] { return stoppedWithFrames() && session.StopCount() > stops + 1; }, 20.0));
+        if (!session.Frames().empty()) CHECK(session.Frames()[(size_t)session.SelectedFrame()].Line == 29);
+        // Without the breakpoint it runs on; Stop ends the game.
+        session.SetBreakpoints(script, {});
+        session.Continue();
+        CHECK(until([&] { return session.GetState() == DebugSession::State::Running; }, 5.0));
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        session.Update();
+        CHECK(session.GetState() == DebugSession::State::Running);
+        session.Stop();
+        CHECK(session.GetState() == DebugSession::State::Ended && !fs::exists(options.GateFile));
+    }
+
     void TestMusicExport()
     {
         using namespace Dimension::Music;
@@ -22441,6 +22521,7 @@ int main(int argc, char** argv)
     Run("Code lexer", TestCodeLexer);
     Run("Code build diagnostics", TestCodeBuildDiagnostics);
     Run("Code language service", TestCodeLanguageService);
+    Run("Code debugger", TestCodeDebugger);
     Run("Sony pad reports", TestSonyPadReports);
     Run("Splash screen image", TestSplashScreenImage);
 

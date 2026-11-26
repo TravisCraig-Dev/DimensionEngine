@@ -215,6 +215,7 @@ namespace Editor
         doc->Buffer.SetText(text);
         doc->DiskTime = fs::last_write_time(path, ec);
         AttachMarks(*doc);
+        AttachBreakpoints(*doc);
         m_Docs.push_back(std::move(doc));
         m_Current = (int)m_Docs.size() - 1;
         m_SelectTab = m_Current;
@@ -245,9 +246,11 @@ namespace Editor
         if (!ReadFile(doc.Path, text)) return;
         TextPos cursor = doc.Buffer.Cursor();
         DetachMarks(doc);
+        SyncBreakpoints(doc);
         doc.Buffer.SetText(text);
         doc.Buffer.SetCursor(cursor);
         AttachMarks(doc);
+        AttachBreakpoints(doc);
         std::error_code ec;
         doc.DiskTime = fs::last_write_time(doc.Path, ec);
         doc.ChangedOnDisk = false;
@@ -257,6 +260,7 @@ namespace Editor
     {
         if (index < 0 || index >= (int)m_Docs.size()) return;
         DetachMarks(*m_Docs[(size_t)index]);
+        SyncBreakpoints(*m_Docs[(size_t)index]);
         m_Docs.erase(m_Docs.begin() + index);
         if (m_Current >= (int)m_Docs.size()) m_Current = (int)m_Docs.size() - 1;
         else if (m_Current > index) --m_Current;
@@ -305,6 +309,14 @@ namespace Editor
             j["files"].push_back((ec || rel.empty() ? doc->Path : rel).generic_string());
         }
         j["current"] = m_Current;
+        for (auto& doc : m_Docs) SyncBreakpoints(*doc);
+        for (auto& [key, file] : m_Breakpoints)
+        {
+            if (file.second.empty()) continue;
+            std::error_code ec;
+            fs::path rel = fs::relative(file.first, project, ec);
+            j["breakpoints"][(ec || rel.empty() ? file.first : rel).generic_string()] = file.second;
+        }
         std::error_code ec;
         fs::create_directories(project / ".dimension", ec);
         std::ofstream(project / ".dimension" / "CodeMode.json") << j.dump(2);
@@ -323,6 +335,18 @@ namespace Editor
             std::error_code ec;
             if (fs::exists(p, ec)) OpenFile(p);
         }
+        if (j.contains("breakpoints") && j["breakpoints"].is_object())
+            for (auto& [name, lines] : j["breakpoints"].items())
+            {
+                fs::path p = name;
+                if (p.is_relative()) p = Project::GetDirectory() / p;
+                std::vector<int> list;
+                for (auto& l : lines)
+                    if (l.is_number_integer()) list.push_back(l.get<int>());
+                m_Breakpoints[PathKey(p)] = { p, list };
+                if (Dimension::DebugSession* session = Debugger ? Debugger() : nullptr) session->SetBreakpoints(p, list);
+            }
+        for (auto& doc : m_Docs) AttachBreakpoints(*doc);
         int current = j.value("current", 0);
         if (current >= 0 && current < (int)m_Docs.size()) m_Current = m_SelectTab = current;
     }
@@ -333,6 +357,7 @@ namespace Editor
     {
         CheckDisk(ImGui::GetIO().DeltaTime);
         UpdateLive();
+        UpdateDebug();
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
         ImGui::SetNextWindowSize(vp->WorkSize);
@@ -384,6 +409,10 @@ namespace Editor
         }
         ImGui::EndDisabled();
         ImGui::SetItemTooltip("Save everything and compile the scripts (Ctrl+B). Saving builds them too.");
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        DrawDebugButtons();
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
@@ -970,6 +999,11 @@ namespace Editor
         bool moved = false, edited = false;
         uint64_t version = b.Version();
         TextPos before = b.Cursor(), anchorBefore = b.Anchor();
+        if (DebugKeys(doc))
+        {
+            io.InputQueueCharacters.resize(0);
+            return;
+        }
         if (AssistKeys(doc))
         {
             io.InputQueueCharacters.resize(0);
@@ -1130,7 +1164,8 @@ namespace Editor
         float lineH = std::round(fontSize * 1.4f);
         int lines = b.LineCount();
         int digits = std::max(3, (int)std::to_string(lines).size());
-        float gutter = (float)(digits + 3) * charW;
+        float margin = std::round(lineH * 0.9f); // (breakpoints and the debugger's arrow)
+        float gutter = margin + (float)(digits + 2) * charW;
         float pad = 6.0f;
 
         if (m_FocusCode)
@@ -1185,7 +1220,12 @@ namespace Editor
             m_Completion.Open = m_Completion.Waiting = false;
             TextPos at = posAt(mouse);
             int clicks = ImGui::GetIO().MouseClickedCount[0];
-            if (mouse.x <= gutterRight)
+            if (mouse.x < inner.Min.x + margin)
+            {
+                ToggleBreakpoint(doc, at.Line);
+                m_Dragging = false;
+            }
+            else if (mouse.x <= gutterRight)
             {
                 m_DragLines = true;
                 m_DragFirstLine = at.Line;
@@ -1204,7 +1244,7 @@ namespace Editor
                 b.SetCursor(at, ImGui::GetIO().KeyShift);
                 m_DragLines = false;
             }
-            m_Dragging = clicks == 1 || mouse.x <= gutterRight;
+            m_Dragging = (clicks == 1 || mouse.x <= gutterRight) && mouse.x >= inner.Min.x + margin;
             m_BlinkStart = ImGui::GetTime();
         }
         if (overText && mouse.x > gutterRight && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
@@ -1232,6 +1272,12 @@ namespace Editor
 
         // Keeping the cursor in view.
         TextPos cursor = b.Cursor();
+        if (doc.CenterOnCursor)
+        {
+            doc.CenterOnCursor = false;
+            float y = (float)cursor.Line * lineH;
+            if (y < window->Scroll.y + lineH * 2.0f || y > window->Scroll.y + viewH - lineH * 3.0f) ImGui::SetScrollY(std::max(0.0f, y - viewH * 0.4f));
+        }
         if (doc.ScrollToCursor)
         {
             doc.ScrollToCursor = false;
@@ -1242,6 +1288,15 @@ namespace Editor
             float textW = viewW - gutter - pad;
             if (x < window->Scroll.x) ImGui::SetScrollX(std::max(0.0f, x - charW * 4.0f));
             else if (x + charW > window->Scroll.x + textW) ImGui::SetScrollX(x - textW + charW * 4.0f);
+        }
+
+        // Where the debugger stopped, when in this file.
+        Dimension::DebugSession* session = Debugger ? Debugger() : nullptr;
+        int stoppedLine = -1;
+        if (session && session->GetState() == Dimension::DebugSession::State::Stopped && !session->Frames().empty())
+        {
+            const auto& f = session->Frames()[(size_t)session->SelectedFrame()];
+            if (!f.File.empty() && PathKey(f.File) == PathKey(doc.Path)) stoppedLine = f.Line;
         }
 
         // The visible lines.
@@ -1259,6 +1314,7 @@ namespace Editor
             // Current line, selection.
             if (l == cursor.Line && !b.HasSelection())
                 draw->AddRectFilled(ImVec2(inner.Min.x, y), ImVec2(inner.Max.x, y + lineH), lineColor);
+            if (l == stoppedLine) draw->AddRectFilled(ImVec2(inner.Min.x, y), ImVec2(inner.Max.x, y + lineH), light ? IM_COL32(255, 238, 150, 255) : IM_COL32(90, 80, 20, 255));
             if (b.HasSelection() && l >= selA.Line && l <= selB.Line)
             {
                 int a = l == selA.Line ? b.VisualColumn(l, selA.Col) : 0;
@@ -1361,6 +1417,26 @@ namespace Editor
                 m_Hover.Col = wordCol;
                 m_Hover.Since = now;
             }
+            if (wordLine >= 0 && !m_Hover.DebugAsked && now - m_Hover.Since > 0.3 && session && session->GetState() == Dimension::DebugSession::State::Stopped)
+            {
+                // The name with what it is a member of ("Transform.Position" on Position).
+                const std::string& s = b.Line(wordLine);
+                int start = wordCol, end = wordCol;
+                while (end < (int)s.size() && IsWordByte(s[(size_t)end])) ++end;
+                while (start > 1 && s[(size_t)start - 1] == '.' && IsWordByte(s[(size_t)start - 2]))
+                {
+                    start -= 1;
+                    while (start > 0 && IsWordByte(s[(size_t)start - 1])) --start;
+                }
+                std::string expression = s.substr((size_t)start, (size_t)(end - start));
+                m_Hover.DebugAsked = true;
+                HoverState* hover = &m_Hover;
+                int line = wordLine, col = wordCol;
+                session->Evaluate(expression, "hover", [this, hover, line, col, expression](bool ok, const std::string& value, const std::string& type, int) {
+                    if (hover->Line != line || hover->Col != col || !ok) return;
+                    hover->DebugText = expression + " = " + value + (type.empty() ? "" : "  (" + type + ")");
+                });
+            }
             if (wordLine >= 0 && !m_Hover.Asked && now - m_Hover.Since > 0.4 && !m_Completion.Open)
             {
                 m_Hover.Asked = true;
@@ -1371,11 +1447,19 @@ namespace Editor
             }
         }
         bool hoverInfo = m_Hover.Have && !m_Hover.Text.empty() && m_Hover.Line >= 0 && !m_Completion.Open;
-        if (hovered || hoverInfo)
+        bool hoverValue = !m_Hover.DebugText.empty() && m_Hover.Line >= 0 && session && session->GetState() == Dimension::DebugSession::State::Stopped;
+        if (hovered || hoverInfo || hoverValue)
         {
             ImGui::PopFont(); // (the tooltip in the interface's font)
             ImGui::BeginTooltip();
             ImGui::PushTextWrapPos(ImGui::GetFontSize() * 40.0f);
+            if (hoverValue)
+            {
+                ImGui::PushFont(font, std::round(fontSize * 0.93f));
+                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "%s", m_Hover.DebugText.c_str());
+                ImGui::PopFont();
+                if (hovered || hoverInfo) ImGui::Separator();
+            }
             if (hovered)
             {
                 ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(SeverityColor(hovered->D.Level)), "%s %s", hovered->D.Level == Severity::Error ? "error" : "warning",
@@ -1422,7 +1506,25 @@ namespace Editor
                                            : (light ? IM_COL32(140, 140, 140, 255) : IM_COL32(110, 110, 110, 255));
             int level = lineLevel[(size_t)(l - first)];
             if (level >= 0) color = SeverityColor((Severity)level); // (a line with a problem: its number in the problem's colour)
-            draw->AddText(drawFont, fontSize, ImVec2(inner.Min.x + charW, y), color, number);
+            draw->AddText(drawFont, fontSize, ImVec2(inner.Min.x + margin, y), color, number);
+        }
+        // Breakpoints (hollow while debugging when the debugger found no code there), and the arrow where it stopped.
+        for (const TextBuffer::Mark& m : b.Marks)
+        {
+            if (m.Id != kBreakpointMark || m.Start.Line < first || m.Start.Line > last) continue;
+            ImVec2 c(inner.Min.x + margin * 0.5f, text.y + (float)m.Start.Line * lineH + lineH * 0.5f);
+            float r = lineH * 0.3f;
+            bool hollow = session && session->IsActive() && session->GetState() != Dimension::DebugSession::State::Starting && !session->IsVerified(doc.Path, m.Start.Line);
+            if (hollow) draw->AddCircle(c, r - 0.5f, IM_COL32(229, 20, 0, 255), 0, 1.5f);
+            else draw->AddCircleFilled(c, r, IM_COL32(229, 20, 0, 255));
+        }
+        if (stoppedLine >= first && stoppedLine <= last)
+        {
+            float y = text.y + (float)stoppedLine * lineH, x0 = inner.Min.x + 2.0f, x1 = inner.Min.x + margin - 2.0f;
+            ImVec2 pts[7] = { { x0, y + lineH * 0.38f }, { x0 + (x1 - x0) * 0.5f, y + lineH * 0.38f }, { x0 + (x1 - x0) * 0.5f, y + lineH * 0.2f }, { x1, y + lineH * 0.5f },
+                              { x0 + (x1 - x0) * 0.5f, y + lineH * 0.8f }, { x0 + (x1 - x0) * 0.5f, y + lineH * 0.62f }, { x0, y + lineH * 0.62f } };
+            draw->AddConcavePolyFilled(pts, 7, IM_COL32(255, 205, 40, 255));
+            draw->AddPolyline(pts, 7, IM_COL32(120, 90, 0, 255), ImDrawFlags_Closed, 1.0f);
         }
         // Where the problems are in the whole file: ticks at the right edge.
         if (!b.Marks.empty())
@@ -1451,7 +1553,7 @@ namespace Editor
     {
         for (auto& doc : m_Docs)
         {
-            doc->Buffer.Marks.clear();
+            std::erase_if(doc->Buffer.Marks, [](const TextBuffer::Mark& m) { return m.Id >= 0; });
             doc->CheckedVersion = 0; // (checked live again: that takes over from the build for its assembly)
         }
         m_Problems.clear();
@@ -1559,7 +1661,7 @@ namespace Editor
     void CodeMode::AttachMarks(Document& doc)
     {
         TextBuffer& b = doc.Buffer;
-        b.Marks.clear();
+        std::erase_if(b.Marks, [](const TextBuffer::Mark& m) { return m.Id >= 0; });
         std::string key = PathKey(doc.Path);
         for (size_t i = 0; i < m_Problems.size(); ++i)
         {
@@ -1598,7 +1700,7 @@ namespace Editor
             d.EndLine = m.End.Line;
             d.EndCol = Code::ByteToUtf16(doc.Buffer.Line(m.End.Line), m.End.Col);
         }
-        doc.Buffer.Marks.clear();
+        std::erase_if(doc.Buffer.Marks, [](const TextBuffer::Mark& m) { return m.Id >= 0; });
     }
 
     void CodeMode::GoToProblem(int index)
@@ -1656,11 +1758,15 @@ namespace Editor
         char refs[64];
         std::snprintf(refs, sizeof(refs), m_References.empty() ? "REFERENCES###refs" : "REFERENCES (%d)###refs", (int)m_References.size());
         tab(refs, 1);
-        if (m_BottomTab == 1)
+        tab("DEBUG", 2);
+        tab("OUTPUT", 3);
+        if (m_BottomTab != 0)
         {
             ImGui::SameLine(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - ImGui::CalcTextSize("x").x - ImGui::GetStyle().FramePadding.x * 2.0f);
             if (ImGui::SmallButton("x")) m_ShowProblems = false;
-            DrawReferences();
+            if (m_BottomTab == 1) DrawReferences();
+            else if (m_BottomTab == 2) DrawDebugPanel();
+            else DrawOutputPanel();
             ImGui::EndChild();
             return;
         }
@@ -2573,6 +2679,7 @@ namespace Editor
             if (ImGui::MenuItem("Rename...", "F2", false, on)) AskAtCursor(doc, Q::RenameCheck);
             ImGui::Separator();
             if (ImGui::MenuItem(doc.Buffer.HasSelection() ? "Format Selection" : "Format Document", "Shift+Alt+F", false, on)) FormatCode(doc);
+            if (ImGui::MenuItem("Toggle Breakpoint", "F9")) ToggleBreakpoint(doc, doc.Buffer.Cursor().Line);
             ImGui::Separator();
             if (ImGui::MenuItem("Cut", "Ctrl+X", false, doc.Buffer.HasSelection()))
             {
@@ -2587,5 +2694,323 @@ namespace Editor
             if (ImGui::MenuItem("Forward", "Alt+Right", false, !m_Forward.empty())) GoBack(true);
             ImGui::EndPopup();
         }
+    }
+
+    // ---- Breakpoints
+
+    std::vector<int> CodeMode::BreakpointLines(Document& doc) const
+    {
+        std::vector<int> lines;
+        for (const TextBuffer::Mark& m : doc.Buffer.Marks)
+            if (m.Id == kBreakpointMark) lines.push_back(m.Start.Line);
+        std::sort(lines.begin(), lines.end());
+        lines.erase(std::unique(lines.begin(), lines.end()), lines.end());
+        return lines;
+    }
+
+    void CodeMode::AttachBreakpoints(Document& doc)
+    {
+        TextBuffer& b = doc.Buffer;
+        std::erase_if(b.Marks, [](const TextBuffer::Mark& m) { return m.Id == kBreakpointMark; });
+        auto it = m_Breakpoints.find(PathKey(doc.Path));
+        if (it == m_Breakpoints.end()) return;
+        for (int line : it->second.second)
+            if (line >= 0 && line < b.LineCount()) b.Marks.push_back({ { line, 0 }, { line, 0 }, kBreakpointMark });
+    }
+
+    void CodeMode::SyncBreakpoints(Document& doc)
+    {
+        std::vector<int> lines = BreakpointLines(doc);
+        m_Breakpoints[PathKey(doc.Path)] = { doc.Path, lines };
+        if (Dimension::DebugSession* session = Debugger ? Debugger() : nullptr) session->SetBreakpoints(doc.Path, lines);
+    }
+
+    void CodeMode::ToggleBreakpoint(Document& doc, int line)
+    {
+        TextBuffer& b = doc.Buffer;
+        line = std::clamp(line, 0, b.LineCount() - 1);
+        size_t before = b.Marks.size();
+        std::erase_if(b.Marks, [&](const TextBuffer::Mark& m) { return m.Id == kBreakpointMark && m.Start.Line == line; });
+        if (b.Marks.size() == before) b.Marks.push_back({ { line, 0 }, { line, 0 }, kBreakpointMark });
+        SyncBreakpoints(doc);
+    }
+
+    // ---- Debugging
+
+    void CodeMode::UpdateDebug()
+    {
+        Dimension::DebugSession* session = Debugger ? Debugger() : nullptr;
+        if (!session) return;
+        // The breakpoints follow the edits (the debugger hears of lines that moved).
+        if (Document* doc = Current()) SyncBreakpoints(*doc);
+        // Stopped: to the place (once per stop or frame chosen), the Debug tab in view.
+        if (session->GetState() == Dimension::DebugSession::State::Stopped && !session->Frames().empty() &&
+            (session->StopCount() != m_SeenStop || session->SelectedFrame() != m_SeenFrame))
+        {
+            bool newStop = session->StopCount() != m_SeenStop;
+            m_SeenStop = session->StopCount();
+            m_SeenFrame = session->SelectedFrame();
+            const auto& f = session->Frames()[(size_t)session->SelectedFrame()];
+            std::error_code ec;
+            if (!f.File.empty() && fs::exists(f.File, ec))
+            {
+                NavigateTo(f.File, f.Line, f.Col, -1, -1, false);
+                if (Document* doc = Current())
+                {
+                    doc->ScrollToCursor = false;
+                    doc->CenterOnCursor = true;
+                }
+            }
+            if (newStop)
+            {
+                m_ShowProblems = true;
+                m_BottomTab = 2;
+                if (!session->StopText().empty()) Note(session->StopText());
+            }
+            m_Hover = HoverState{};
+        }
+        // Watches: their values for this stop and frame.
+        if (session->GetState() == Dimension::DebugSession::State::Stopped && !session->Frames().empty())
+        {
+            uint64_t key = session->StopCount() * 1024 + (uint64_t)session->SelectedFrame();
+            for (size_t i = 0; i < m_Watches.size(); ++i)
+            {
+                if (m_Watches[i].For == key) continue;
+                m_Watches[i].For = key;
+                m_Watches[i].Value = "...";
+                std::string expression = m_Watches[i].Expression;
+                session->Evaluate(expression, "watch", [this, key, expression](bool ok, const std::string& value, const std::string& type, int) {
+                    for (Watch& w : m_Watches)
+                        if (w.Expression == expression && w.For == key)
+                        {
+                            w.Ok = ok;
+                            w.Value = ok && !type.empty() ? value + "  (" + type + ")" : value;
+                        }
+                });
+            }
+        }
+    }
+
+    bool CodeMode::DebugKeys(Document& doc)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        auto pressed = [](ImGuiKey key) { return ImGui::IsKeyPressed(key, false); };
+        Dimension::DebugSession* session = Debugger ? Debugger() : nullptr;
+        if (io.KeyCtrl || io.KeyAlt) return false;
+        if (pressed(ImGuiKey_F9))
+        {
+            ToggleBreakpoint(doc, doc.Buffer.Cursor().Line);
+            return true;
+        }
+        if (!session) return false;
+        bool stopped = session->GetState() == Dimension::DebugSession::State::Stopped;
+        if (pressed(ImGuiKey_F5))
+        {
+            if (io.KeyShift) session->Stop();
+            else if (stopped) session->Continue();
+            else if (!session->IsActive() && StartDebugging) StartDebugging();
+            return true;
+        }
+        if (stopped && pressed(ImGuiKey_F10))
+        {
+            session->StepOver();
+            return true;
+        }
+        if (stopped && pressed(ImGuiKey_F11))
+        {
+            io.KeyShift ? session->StepOut() : session->StepIn();
+            return true;
+        }
+        return false;
+    }
+
+    void CodeMode::DrawDebugButtons()
+    {
+        using S = Dimension::DebugSession::State;
+        Dimension::DebugSession* session = Debugger ? Debugger() : nullptr;
+        if (!session)
+        {
+            ImGui::BeginDisabled();
+            ImGui::Button("Debug");
+            ImGui::EndDisabled();
+            ImGui::SetItemTooltip("C# scripting is off: nothing to debug");
+            return;
+        }
+        S state = session->GetState();
+        if (!session->IsActive())
+        {
+            if (ImGui::Button("Debug") && StartDebugging) StartDebugging();
+            ImGui::SetItemTooltip("Run the scene in a game window with the debugger (F5): it stops at breakpoints (F9, or click left of a line number)");
+            return;
+        }
+        bool stopped = state == S::Stopped;
+        ImGui::BeginDisabled(!stopped);
+        if (ImGui::Button("Continue")) session->Continue();
+        ImGui::SetItemTooltip("F5");
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(state != S::Running);
+        if (ImGui::Button("Pause")) session->Pause();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!stopped);
+        if (ImGui::Button("Step Over")) session->StepOver();
+        ImGui::SetItemTooltip("F10");
+        ImGui::SameLine();
+        if (ImGui::Button("Step Into")) session->StepIn();
+        ImGui::SetItemTooltip("F11");
+        ImGui::SameLine();
+        if (ImGui::Button("Step Out")) session->StepOut();
+        ImGui::SetItemTooltip("Shift+F11");
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Stop")) session->Stop();
+        ImGui::SetItemTooltip("End the game (Shift+F5)");
+        ImGui::SameLine();
+        const char* what = state == S::Starting ? "Starting the game..." : state == S::Running ? "Running" : "Stopped";
+        ImGui::TextColored(stopped ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0.5f, 0.85f, 0.5f, 1.0f), "%s", what);
+    }
+
+    void CodeMode::DrawVariable(Dimension::DebugSession::Variable& v, Dimension::DebugSession& session)
+    {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAllColumns | (v.Ref > 0 ? 0 : ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen);
+        ImGui::PushID(&v);
+        bool open = ImGui::TreeNodeEx("##var", flags, "%s", v.Name.c_str());
+        if (ImGui::BeginPopupContextItem())
+        {
+            if (ImGui::MenuItem("Add Watch")) m_Watches.push_back({ v.EvaluateName.empty() ? v.Name : v.EvaluateName });
+            if (ImGui::MenuItem("Copy Value")) ImGui::SetClipboardText(v.Value.c_str());
+            ImGui::EndPopup();
+        }
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(v.Value.c_str());
+        if (ImGui::IsItemHovered() && ImGui::CalcTextSize(v.Value.c_str()).x > ImGui::GetColumnWidth()) ImGui::SetTooltip("%s", v.Value.c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextDisabled("%s", v.Type.c_str());
+        if (open && v.Ref > 0)
+        {
+            session.Expand(v);
+            if (v.Loading && v.Children.empty())
+            {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("...");
+            }
+            for (auto& c : v.Children) DrawVariable(c, session);
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+
+    void CodeMode::DrawDebugPanel()
+    {
+        using S = Dimension::DebugSession::State;
+        Dimension::DebugSession* session = Debugger ? Debugger() : nullptr;
+        if (!session)
+        {
+            ImGui::TextDisabled("C# scripting is off: nothing to debug.");
+            return;
+        }
+        bool breakOn = session->BreakOnExceptions();
+        if (ImGui::Checkbox("Break on exceptions", &breakOn)) session->SetBreakOnExceptions(breakOn);
+        ImGui::SetItemTooltip("Stop where any exception is thrown in the scripts");
+        if (session->GetState() != S::Stopped)
+        {
+            ImGui::TextDisabled(session->IsActive() ? "The game is running: it stops at breakpoints (or press Pause)."
+                                                    : "Press Debug (F5) to run the scene in a game window with the debugger. Click left of a line number (or F9) "
+                                                      "for a breakpoint; when the game reaches it, it stops and its call stack and variables show here.");
+            if (!session->Error().empty()) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", session->Error().c_str());
+            return;
+        }
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        float stackW = std::round(avail.x * 0.28f), watchW = std::round(avail.x * 0.3f);
+        // Call stack.
+        ImGui::BeginChild("##stack", ImVec2(stackW, avail.y), ImGuiChildFlags_Borders);
+        ImGui::TextDisabled("CALL STACK");
+        const auto& frames = session->Frames();
+        for (int i = 0; i < (int)frames.size(); ++i)
+        {
+            const auto& f = frames[(size_t)i];
+            std::string label = f.Name + (f.File.empty() ? "" : "  " + f.File.filename().string() + ":" + std::to_string(f.Line + 1));
+            ImGui::PushID(i);
+            if (f.File.empty()) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            std::error_code ec;
+            bool source = !f.File.empty() && fs::exists(f.File, ec);
+            if (ImGui::Selectable(label.c_str(), i == session->SelectedFrame()) && source) session->SelectFrame(i);
+            if (!source && !f.File.empty()) ImGui::SetItemTooltip("Its source isn't here");
+            if (f.File.empty())
+            {
+                ImGui::PopStyleColor();
+                ImGui::SetItemTooltip("No source here (engine or .NET code)");
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+        ImGui::SameLine();
+        // Variables.
+        ImGui::BeginChild("##vars", ImVec2(avail.x - stackW - watchW - ImGui::GetStyle().ItemSpacing.x * 2.0f, avail.y), ImGuiChildFlags_Borders);
+        if (ImGui::BeginTable("##variables", 3, ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV,
+                              ImGui::GetContentRegionAvail()))
+        {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.35f);
+            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.45f);
+            ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch, 0.2f);
+            ImGui::TableHeadersRow();
+            for (auto& scope : session->Scopes())
+                for (auto& v : scope.Children) DrawVariable(v, *session);
+            ImGui::EndTable();
+        }
+        ImGui::EndChild();
+        ImGui::SameLine();
+        // Watches.
+        ImGui::BeginChild("##watch", ImVec2(0, avail.y), ImGuiChildFlags_Borders);
+        ImGui::TextDisabled("WATCH");
+        int remove = -1;
+        for (int i = 0; i < (int)m_Watches.size(); ++i)
+        {
+            Watch& w = m_Watches[(size_t)i];
+            ImGui::PushID(i);
+            if (ImGui::SmallButton("x")) remove = i;
+            ImGui::SameLine();
+            ImGui::TextUnformatted(w.Expression.c_str());
+            ImGui::SameLine();
+            ImGui::TextColored(w.Ok ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "= %s", w.Value.c_str());
+            ImGui::PopID();
+        }
+        if (remove >= 0) m_Watches.erase(m_Watches.begin() + remove);
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputTextWithHint("##newwatch", "Add an expression (Enter)", &m_NewWatch, ImGuiInputTextFlags_EnterReturnsTrue) && !m_NewWatch.empty())
+        {
+            m_Watches.push_back({ m_NewWatch });
+            m_NewWatch.clear();
+        }
+        ImGui::EndChild();
+    }
+
+    void CodeMode::DrawOutputPanel()
+    {
+        Dimension::DebugSession* session = Debugger ? Debugger() : nullptr;
+        ImGui::BeginChild("##output", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+        if (!session || session->Output().empty()) ImGui::TextDisabled("What the game prints while it is debugged shows here.");
+        else
+        {
+            ImFont* mono = ImGuiLayer::GetMonoFont();
+            if (mono) ImGui::PushFont(mono, 0.0f);
+            ImGuiListClipper clipper;
+            clipper.Begin((int)session->Output().size());
+            while (clipper.Step())
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) ImGui::TextUnformatted(session->Output()[(size_t)i].c_str());
+            if (mono) ImGui::PopFont();
+            // (new lines: kept in view while at the bottom)
+            if (session->OutputCount() != m_OutputSeen)
+            {
+                m_OutputSeen = session->OutputCount();
+                if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 40.0f) ImGui::SetScrollHereY(1.0f);
+            }
+        }
+        ImGui::EndChild();
     }
 }

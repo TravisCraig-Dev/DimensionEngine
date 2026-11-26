@@ -235,6 +235,11 @@ namespace Editor
         bool m_HandleEditActive = false; // a handle drag is under way (its edits share one undo step)
         std::map<std::string, bool> m_ScriptWindows;
         void BuildCSharp();
+        // Code Mode's debugger: the scene saved, the scripts built if they changed, then the game in a player with
+        // netcoredbg attached (LaunchDebugger).
+        void StartDebugging();
+        void LaunchDebugger();
+        void UpdateDebugger();
         void PollCSharp(float dt);
 
         EditorOptions m_Options;
@@ -408,6 +413,10 @@ namespace Editor
         Scope<Dimension::LanguageService> m_Language;
         bool m_RoslynBuild = false; // the build in progress is the language service's
         uint64_t m_CSharpBuildCount = 0;
+        Scope<Dimension::DebugSession> m_Debug;
+        bool m_DebugAfterBuild = false; // (Debug pressed while the scripts had to be built first)
+        bool m_LaunchDebuggerNext = false;
+        uint64_t m_DebugStopSeen = 0;
         uint64_t m_RoslynBuildTag = 0;
         bool m_PlayWhenScriptsReady = false;             // Play pressed while they compiled: starts when they are loaded
         fs::file_time_type m_CSharpBuiltSources{};

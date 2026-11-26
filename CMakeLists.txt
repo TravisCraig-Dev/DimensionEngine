@@ -40,6 +40,7 @@ add_subdirectory(Engine)
 add_subdirectory(Game)
 add_subdirectory(Editor)
 add_subdirectory(Player)
+include(cmake/NetCoreDbg.cmake)
 
 if(NOT DIM_DISTRIBUTION)
     enable_testing()

@@ -281,4 +281,11 @@ namespace Dimension
         auto s = GetFramebufferSize();
         return s.x == 0 || s.y == 0 || glfwGetWindowAttrib(m_Window, GLFW_ICONIFIED);
     }
+
+    void Window::Focus()
+    {
+        if (!m_Window) return;
+        if (glfwGetWindowAttrib(m_Window, GLFW_ICONIFIED)) glfwRestoreWindow(m_Window); // (not when maximized: that would shrink it)
+        glfwFocusWindow(m_Window);
+    }
 }

@@ -1,6 +1,7 @@
 // Dimension Player: runs a project's start scene without the editor.
 // Usage: DimensionPlayer [projectDir] [--scene path] [--frames N] [--screenshot file] [--prebuild-textures dir]
 //        [--move x,y,frame] [--click x,y,frame]   simulated pointer for automated checks (framebuffer pixels)
+//        [--wait-for-debugger] [--debug-gate file]   wait for a C# debugger, then while the file exists (the editor's debugger)
 //        [--key name,frame]   a key pressed for that one frame (Right, Left, Up, Down, Enter, Space, Tab, Escape, A-Z)
 //        [--no-instancing] [--no-vsync]           draw every mesh separately / uncapped frame rate (for comparisons)
 //        [--no-clusters]                          shade every light at every pixel (for comparisons)
@@ -31,6 +32,7 @@
 #include <Dimension/Platform/AppIcon.h>
 #include <Dimension/Core/AppRuntime.h>
 #include <chrono>
+#include <thread>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -226,6 +228,7 @@ int main(int argc, char** argv)
     std::vector<PointerEvent> pointerEvents;
     std::vector<KeyEvent> keyEvents;
     bool noVSync = false, waitForDebugger = false;
+    fs::path debugGate; // (the editor's debugger: after attaching, wait while this file exists, until its breakpoints are in)
     for (int i = 1; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) sceneOverride = argv[++i];
@@ -242,6 +245,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--no-vsync")) noVSync = true;
         else if (!std::strcmp(argv[i], "--fixed-dt") && i + 1 < argc) s_FixedDt = (float)std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--wait-for-debugger")) waitForDebugger = true;
+        else if (!std::strcmp(argv[i], "--debug-gate") && i + 1 < argc) debugGate = argv[++i];
         else if (!std::strcmp(argv[i], "--system-language") && i + 1 < argc) Localization::SetSystemLanguage(argv[++i]);
         else if (!std::strcmp(argv[i], "--ime") && i + 1 < argc)
         {
@@ -338,7 +342,12 @@ int main(int argc, char** argv)
             GameModule::Load(ExecutableDirectory() / Platform::SharedLibraryName(config.GameModule));
         if (CSharpRuntime::Init(ExecutableDirectory() / "managed"))
         {
-            if (waitForDebugger) CSharpRuntime::WaitForDebugger(60.0f);
+            if (waitForDebugger && CSharpRuntime::WaitForDebugger(60.0f) && !debugGate.empty())
+            {
+                std::error_code ec;
+                auto until = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+                while (fs::exists(debugGate, ec) && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
             CSharpRuntime::LoadScripts(CSharpProject::AssemblyPath(Project::GetDirectory()), false);
         }
 

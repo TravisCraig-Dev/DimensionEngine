@@ -4,6 +4,8 @@
 #include <Dimension/Code/CSharpLexer.h>
 #include <Dimension/Code/BuildDiagnostics.h>
 #include <Dimension/Scripting/LanguageService.h>
+#include <Dimension/Debugger/DebugSession.h>
+#include <map>
 #include <imgui.h>
 #include <functional>
 #include <memory>
@@ -36,6 +38,11 @@ namespace Editor
         std::function<int()> BuildState;
         // The editor's language service (null when C# scripting is off).
         std::function<Dimension::LanguageService*()> Language;
+        // The editor's C# debugger, and starting it (saves, builds if needed, runs the scene in a player).
+        std::function<Dimension::DebugSession*()> Debugger;
+        std::function<void()> StartDebugging;
+        // A passing message in the status bar.
+        void Note(std::string message);
         // The last build's errors and warnings: listed, and underlined in the files (the list opens when it failed).
         void SetBuildResult(std::vector<Dimension::Code::Diagnostic> diagnostics, bool succeeded);
 
@@ -62,6 +69,7 @@ namespace Editor
             uint64_t StatesVersion = 0;
             int LongestLine = 0; // in columns
             bool ScrollToCursor = false;
+            bool CenterOnCursor = false; // (the debugger's place: in the middle of the view)
             float ScrollY = 0.0f, ScrollX = 0.0f;
             // Live checking: the version last seen (and when it changed), and the one last sent to be checked.
             uint64_t SeenVersion = 0, CheckedVersion = 0;
@@ -111,7 +119,20 @@ namespace Editor
         void DrawReferences();
         void DrawRenamePopup();
         void DrawCodeMenu(Document& doc);
-        void Note(std::string message); // a passing message in the status bar
+
+        // Breakpoints: marks in open files (they follow edits), lines for the others; the debugger always has them.
+        static constexpr int kBreakpointMark = -2;
+        std::vector<int> BreakpointLines(Document& doc) const;
+        void ToggleBreakpoint(Document& doc, int line);
+        void AttachBreakpoints(Document& doc);
+        void SyncBreakpoints(Document& doc); // its lines to m_Breakpoints and the debugger
+        // Debugging: going to where it stopped, the debug controls and keys, the Debug and Output tabs.
+        void UpdateDebug();
+        bool DebugKeys(Document& doc);
+        void DrawDebugButtons();
+        void DrawDebugPanel();
+        void DrawOutputPanel();
+        void DrawVariable(Dimension::DebugSession::Variable& v, Dimension::DebugSession& session);
         void DrawPopups();
         void HandleKeys(Document& doc, int pageLines);
         void TypeText(Document& doc, const std::string& text);
@@ -192,6 +213,9 @@ namespace Editor
             bool Asked = false, Have = false;
             uint64_t Tag = 0;
             std::string Text, Info;
+            // While stopped in the debugger: the expression's value.
+            bool DebugAsked = false;
+            std::string DebugText;
         } m_Hover;
 
         // Navigation, references, rename, format.
@@ -214,6 +238,19 @@ namespace Editor
         std::string m_Note;
         double m_NoteTime = 0.0;
         bool m_OpenCodeMenu = false;
+
+        std::map<std::string, std::pair<fs::path, std::vector<int>>> m_Breakpoints; // by PathKey
+        uint64_t m_SeenStop = 0;
+        int m_SeenFrame = -1;
+        struct Watch
+        {
+            std::string Expression, Value;
+            bool Ok = true;
+            uint64_t For = 0; // (the stop and frame its value is for)
+        };
+        std::vector<Watch> m_Watches;
+        std::string m_NewWatch;
+        uint64_t m_OutputSeen = 0;
 
         // Popups: a tab's unsaved changes, new script/folder, rename, delete.
         int m_ConfirmClose = -1;

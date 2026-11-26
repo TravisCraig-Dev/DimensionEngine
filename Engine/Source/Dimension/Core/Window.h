@@ -51,6 +51,8 @@ namespace Dimension
         // colors need Windows 11; Windows 10 only takes the dark mode. No effect on other platforms.
         void SetTitleBarColors(uint32_t background, uint32_t text, bool dark);
         bool IsFullscreen() const { return m_Fullscreen; }
+        // Brings the window to the front with the keyboard (the C# debugger stopping in a game in another window).
+        void Focus();
         GLFWwindow* GetNative() const { return m_Window; }
 
         std::function<void(std::vector<fs::path>)> OnFilesDropped;
