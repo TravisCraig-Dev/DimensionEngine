@@ -78,6 +78,7 @@
 #include <Dimension/Physics/Water.h>
 #include <Dimension/Project/Project.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
+#include <Dimension/Scripting/LanguageService.h>
 #include <Dimension/Scripting/ManagedBuild.h>
 #include <Dimension/Scripting/CSharpProject.h>
 #include <Dimension/Platform/AppIcon.h>
@@ -21862,6 +21863,67 @@ namespace
         CHECK(b.Marks.empty());
     }
 
+    void TestCodeLanguageService()
+    {
+        // The service's answer read back.
+        auto parsed = LanguageService::ParseResult(R"({"assembly":"GameScripts","files":["C:/G/Scripts/A.cs"],"diagnostics":[)"
+                                                   R"({"file":"C:/G/Scripts/A.cs","line":2,"col":4,"endLine":2,"endCol":9,"severity":"error","code":"CS0103","message":"no"},)"
+                                                   R"({"file":"C:/G/Scripts/A.cs","line":0,"col":0,"endLine":0,"endCol":1,"severity":"warning","code":"CS0168","message":"w"}],"ms":12.5})");
+        CHECK(parsed.Error.empty() && parsed.Assembly == "GameScripts" && parsed.Files.size() == 1 && parsed.Diagnostics.size() == 2);
+        CHECK(parsed.Diagnostics[0].Line == 2 && parsed.Diagnostics[0].EndCol == 9 && parsed.Diagnostics[0].Code == "CS0103");
+        CHECK(parsed.Diagnostics[1].Level == Dimension::Code::Severity::Warning && parsed.Milliseconds == 12.5);
+        CHECK(!LanguageService::ParseResult(R"({"error":"boom"})").Error.empty() && !LanguageService::ParseResult("not json").Error.empty());
+
+        // Roslyn in the hosted .NET checking a small project (unsaved texts in place of the files).
+        fs::path managed = ExecutableDir() / "managed";
+        if (!fs::exists(managed / "codeservice" / "Dimension.CodeService.dll") || !CSharpRuntime::Init(managed))
+        {
+            std::printf("  skipped: C# runtime or the language service not available\n");
+            return;
+        }
+        fs::path project = fs::temp_directory_path() / "dim_language_service_test";
+        std::error_code ec;
+        fs::remove_all(project, ec);
+        fs::create_directories(project / "Scripts" / "Sub", ec);
+        std::ofstream(project / "Scripts" / "GameScripts.csproj")
+            << "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework>"
+               "<ImplicitUsings>enable</ImplicitUsings><Nullable>disable</Nullable></PropertyGroup></Project>";
+        fs::path a = project / "Scripts" / "Mover.cs", b = project / "Scripts" / "Sub" / "Helper.cs";
+        std::ofstream(a) << "using Dimension;\npublic class Mover : Behaviour\n{\n    List<int> m_Steps = new();\n    public override void OnUpdate(float dt) { Helper.Step(dt); }\n}\n";
+        std::ofstream(b) << "public static class Helper\n{\n    public static void Step(float dt) { }\n}\n";
+
+        LanguageService service;
+        CHECK(service.Start(managed, project));
+        auto check = [&](std::vector<LanguageService::Overlay> overlays) {
+            service.Request(a, std::move(overlays), 7);
+            for (int i = 0; i < 600; ++i) // (the first check loads Roslyn)
+            {
+                if (auto r = service.Poll()) return *r;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            return LanguageService::Result{ 0, "", {}, {}, 0.0, "timed out" };
+        };
+        auto errors = [](const LanguageService::Result& r) {
+            int n = 0;
+            for (auto& d : r.Diagnostics) n += d.Level == Dimension::Code::Severity::Error;
+            return n;
+        };
+        // As saved: clean (the engine's API, the implicit usings and the other file are all seen).
+        auto r = check({});
+        CHECK(r.Error.empty() && r.Tag == 7 && r.Assembly == "GameScripts" && r.Files.size() == 2);
+        CHECK(errors(r) == 0);
+        if (!r.Error.empty()) std::printf("  %s\n", r.Error.c_str());
+        // Being edited: a call of something missing, on line 5 where it is.
+        std::string edited = "using Dimension;\npublic class Mover : Behaviour\n{\n    List<int> m_Steps = new();\n    public override void OnUpdate(float dt) { Helper.Jump(dt); }\n}\n";
+        r = check({ { a, edited } });
+        CHECK(errors(r) == 1 && !r.Diagnostics.empty() && r.Diagnostics[0].Code == "CS0117" && r.Diagnostics[0].Line == 4);
+        CHECK(!r.Diagnostics.empty() && r.Diagnostics[0].Col == (int)edited.substr(edited.find("public override")).find("Jump") + 4);
+        // The other file changed (unsaved) to have it: clean again.
+        r = check({ { a, edited }, { b, "public static class Helper\n{\n    public static void Jump(float dt) { }\n}\n" } });
+        CHECK(errors(r) == 0);
+        fs::remove_all(project, ec);
+    }
+
     void TestMusicExport()
     {
         using namespace Dimension::Music;
@@ -22228,6 +22290,7 @@ int main(int argc, char** argv)
     Run("Code text buffer", TestCodeTextBuffer);
     Run("Code lexer", TestCodeLexer);
     Run("Code build diagnostics", TestCodeBuildDiagnostics);
+    Run("Code language service", TestCodeLanguageService);
     Run("Sony pad reports", TestSonyPadReports);
     Run("Splash screen image", TestSplashScreenImage);
 

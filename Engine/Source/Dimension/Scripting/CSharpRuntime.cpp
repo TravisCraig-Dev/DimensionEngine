@@ -455,6 +455,7 @@ namespace Dimension
         std::vector<CSharpRuntime::EditorItem> s_EditorItems;
 
         bool s_Available = false;
+        load_assembly_and_get_function_pointer_fn s_LoadAssembly = nullptr;
         ManagedApi s_Managed{};
         NativeApi s_Native{};
         fs::path s_ScriptsPath;
@@ -3113,6 +3114,7 @@ namespace Dimension
             return false;
         }
 
+        s_LoadAssembly = loadAssembly;
         int (*initialize)(void*, void*) = nullptr;
         rc = loadAssembly(assembly.c_str(), DIM_HOST_STR("Dimension.Interop.Host, Dimension.Core"), DIM_HOST_STR("Initialize"), UNMANAGEDCALLERSONLY_METHOD, nullptr,
                           (void**)&initialize);
@@ -3147,6 +3149,18 @@ namespace Dimension
     }
 
     bool CSharpRuntime::IsAvailable() { return s_Available; }
+
+    void* CSharpRuntime::GetFunction(const fs::path& assembly, const char* type, const char* method)
+    {
+        if (!s_Available || !s_LoadAssembly || !fs::exists(assembly)) return nullptr;
+        // (the host's strings are UTF-16 on Windows)
+        auto wide = [](const char* s) { return fs::path(s).native(); };
+        fs::path::string_type typeName = wide(type), methodName = wide(method);
+        void* fn = nullptr;
+        int rc = s_LoadAssembly(assembly.c_str(), typeName.c_str(), methodName.c_str(), UNMANAGEDCALLERSONLY_METHOD, nullptr, &fn);
+        if (rc < 0) Log::Error("Managed entry point {}.{} not found in '{}' (0x{:08x})", type, method, assembly.filename().string(), (uint32_t)rc);
+        return rc < 0 ? nullptr : fn;
+    }
 
     std::string CSharpRuntime::RunTests(bool run, const std::string& filter)
     {

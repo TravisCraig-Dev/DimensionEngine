@@ -108,6 +108,9 @@ namespace Dimension
         // Where the runtime in use came from: "bundled" or "installed" (empty before Init).
         static const char* RuntimeSource();
         static bool IsAvailable();
+        // A static [UnmanagedCallersOnly] method of another managed assembly (loaded into a load context of its own,
+        // with the dependencies its .deps.json names): `type` as "Namespace.Type, Assembly". Null when not found.
+        static void* GetFunction(const fs::path& assembly, const char* type, const char* method);
 
         // Loads (or reloads) a user scripts assembly. No script instances may be alive. Not reloadable (a built
         // game): loaded once from the file and kept, so its ReadyToRun code is used (hot reload needs a collectible

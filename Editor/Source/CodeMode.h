@@ -3,6 +3,7 @@
 #include <Dimension/Code/TextBuffer.h>
 #include <Dimension/Code/CSharpLexer.h>
 #include <Dimension/Code/BuildDiagnostics.h>
+#include <Dimension/Scripting/LanguageService.h>
 #include <imgui.h>
 #include <functional>
 #include <memory>
@@ -19,6 +20,7 @@ namespace Editor
     {
     public:
         explicit CodeMode(EditorContext& ctx) : m_Ctx(ctx) {}
+        ~CodeMode();
 
         bool IsActive() const { return m_Active; }
         // Into Code Mode, with `file` open (else the files open last time); false when `file` cannot be read.
@@ -40,6 +42,7 @@ namespace Editor
             Dimension::Code::Diagnostic D; // (its place is kept up to date from the file's mark while the file is open)
             fs::path Path;                 // the file (empty when it is about none)
             std::string Key;               // Path for comparing
+            bool Live = false;             // from the language service (checked as typed), not a build
         };
         const std::vector<Problem>& Problems() const { return m_Problems; }
         // Automation and tests: to a problem's place (opens its file).
@@ -58,6 +61,9 @@ namespace Editor
             int LongestLine = 0; // in columns
             bool ScrollToCursor = false;
             float ScrollY = 0.0f, ScrollX = 0.0f;
+            // Live checking: the version last seen (and when it changed), and the one last sent to be checked.
+            uint64_t SeenVersion = 0, CheckedVersion = 0;
+            double EditTime = 0.0;
         };
         // Automation and tests: the file being edited (null with none open).
         Document* Current() { return m_Current >= 0 && m_Current < (int)m_Docs.size() ? m_Docs[(size_t)m_Current].get() : nullptr; }
@@ -75,6 +81,11 @@ namespace Editor
         // The problems in a file as marks in its buffer (so they follow edits), and their places back when it closes.
         void AttachMarks(Document& doc);
         void DetachMarks(Document& doc);
+        // After m_Problems changed: sorted, the explorer's error files, and the marks again (marks detached first).
+        void RebuildProblems();
+        // Live checking (the language service): asks for the file being edited once typing pauses, takes in results.
+        void UpdateLive();
+        void ApplyLive(Dimension::LanguageService::Result& result);
         void DrawPopups();
         void HandleKeys(Document& doc, int pageLines);
         void TypeText(Document& doc, const std::string& text);
@@ -116,6 +127,13 @@ namespace Editor
         bool m_HaveBuildResult = false, m_LastBuildOk = false;
         bool m_ShowProblems = false, m_ShowErrors = true, m_ShowWarnings = true;
         int m_SelectedProblem = -1;
+
+        // The language service (Roslyn in the editor's .NET): started with Code Mode when C# scripting runs.
+        std::unique_ptr<Dimension::LanguageService> m_Language;
+        bool m_LanguageTried = false;
+        fs::path m_LivePath;     // the file of the request in flight
+        double m_LiveMs = -1.0;  // how long the last check took
+        std::string m_LiveError;
 
         // Popups: a tab's unsaved changes, new script/folder, rename, delete.
         int m_ConfirmClose = -1;

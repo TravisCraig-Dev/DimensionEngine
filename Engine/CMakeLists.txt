@@ -94,7 +94,9 @@ if(DIM_NETHOST_DIR AND EXISTS "${DIM_NETHOST_DIR}/nethost.h")
                 -c $<IF:$<CONFIG:Debug>,Debug,Release> -o "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/managed" --nologo -v q
         COMMAND "${DIM_DOTNET_EXE}" build "${CMAKE_SOURCE_DIR}/Engine/Managed/Dimension.Analyzers.CodeFixes/Dimension.Analyzers.CodeFixes.csproj"
                 -c $<IF:$<CONFIG:Debug>,Debug,Release> -o "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/managed" --nologo -v q
-        COMMENT "Building Dimension.Core (C# API) and the scripts' analyzers"
+        COMMAND "${DIM_DOTNET_EXE}" build "${CMAKE_SOURCE_DIR}/Engine/Managed/Dimension.CodeService/Dimension.CodeService.csproj"
+                -c $<IF:$<CONFIG:Debug>,Debug,Release> -o "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/managed/codeservice" --nologo -v q
+        COMMENT "Building Dimension.Core (C# API), the scripts' analyzers and Code Mode's language service"
         VERBATIM)
     add_dependencies(DimensionEngine DimensionManaged)
 else()

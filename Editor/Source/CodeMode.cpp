@@ -1,5 +1,7 @@
 #include "CodeMode.h"
 #include <Dimension/Core/Log.h>
+#include <Dimension/Platform/Platform.h>
+#include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/ImGui/ImGuiLayer.h>
 #include <Dimension/Platform/FileDialogs.h>
 #include <Dimension/Project/Project.h>
@@ -137,6 +139,8 @@ namespace Editor
             }
         }
     }
+
+    CodeMode::~CodeMode() = default;
 
     fs::path CodeMode::ScriptsDir() const { return CSharpProject::ScriptsDirectory(Project::GetDirectory()); }
 
@@ -328,6 +332,7 @@ namespace Editor
     void CodeMode::OnImGui()
     {
         CheckDisk(ImGui::GetIO().DeltaTime);
+        UpdateLive();
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
         ImGui::SetNextWindowSize(vp->WorkSize);
@@ -700,6 +705,21 @@ namespace Editor
         int state = BuildState ? BuildState() : 0;
         if (state == 0 && m_HaveBuildResult) state = m_LastBuildOk ? 2 : 3; // (the editor forgets it once taken in)
         const char* text = state == 1 ? "Building..." : state == 2 ? "Build succeeded" : state == 3 ? "Build failed" : "";
+        if (m_Language && state != 1)
+        {
+            ImGui::SameLine(0, 24);
+            if (m_Language->Busy()) ImGui::TextDisabled("Checking...");
+            else if (!m_LiveError.empty())
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "Live checking failed");
+                ImGui::SetItemTooltip("%s", m_LiveError.c_str());
+            }
+            else if (m_LiveMs >= 0.0)
+            {
+                ImGui::TextDisabled("Checked live");
+                ImGui::SetItemTooltip("Errors are found as you type (the last check took %.0f ms)", m_LiveMs);
+            }
+        }
         float right = ImGui::GetWindowContentRegionMax().x;
         float textW = *text ? ImGui::CalcTextSize(text).x : 0.0f;
         float countsW = ImGui::CalcTextSize(counts).x + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -1336,10 +1356,12 @@ namespace Editor
 
     void CodeMode::SetBuildResult(std::vector<Diagnostic> diagnostics, bool succeeded)
     {
-        for (auto& doc : m_Docs) doc->Buffer.Marks.clear();
+        for (auto& doc : m_Docs)
+        {
+            doc->Buffer.Marks.clear();
+            doc->CheckedVersion = 0; // (checked live again: that takes over from the build for its assembly)
+        }
         m_Problems.clear();
-        m_ErrorFiles.clear();
-        m_SelectedProblem = -1;
         for (Diagnostic& d : diagnostics)
         {
             Problem p;
@@ -1353,6 +1375,16 @@ namespace Editor
             }
             m_Problems.push_back(std::move(p));
         }
+        RebuildProblems();
+        int errors = 0;
+        for (const Problem& p : m_Problems) errors += p.D.Level == Severity::Error;
+        m_HaveBuildResult = true;
+        m_LastBuildOk = succeeded;
+        if (!succeeded && errors > 0) m_ShowProblems = true;
+    }
+
+    void CodeMode::RebuildProblems()
+    {
         // Errors first, then by file and place.
         std::stable_sort(m_Problems.begin(), m_Problems.end(), [](const Problem& a, const Problem& b) {
             if (a.D.Level != b.D.Level) return a.D.Level < b.D.Level;
@@ -1360,17 +1392,78 @@ namespace Editor
             if (a.D.Line != b.D.Line) return a.D.Line < b.D.Line;
             return a.D.Col < b.D.Col;
         });
-        int errors = 0;
+        m_ErrorFiles.clear();
         for (const Problem& p : m_Problems)
-            if (p.D.Level == Severity::Error)
-            {
-                ++errors;
-                if (!p.Key.empty() && std::find(m_ErrorFiles.begin(), m_ErrorFiles.end(), p.Key) == m_ErrorFiles.end()) m_ErrorFiles.push_back(p.Key);
-            }
+            if (p.D.Level == Severity::Error && !p.Key.empty() && std::find(m_ErrorFiles.begin(), m_ErrorFiles.end(), p.Key) == m_ErrorFiles.end())
+                m_ErrorFiles.push_back(p.Key);
+        m_SelectedProblem = -1;
         for (auto& doc : m_Docs) AttachMarks(*doc);
-        m_HaveBuildResult = true;
-        m_LastBuildOk = succeeded;
-        if (!succeeded && errors > 0) m_ShowProblems = true;
+    }
+
+    // ---- Live checking
+
+    void CodeMode::UpdateLive()
+    {
+        if (!m_Language && !m_LanguageTried && CSharpRuntime::IsAvailable())
+        {
+            m_LanguageTried = true;
+            auto service = std::make_unique<LanguageService>();
+            if (service->Start(Platform::ExecutableDirectory() / "managed", Project::GetDirectory())) m_Language = std::move(service);
+        }
+        if (!m_Language) return;
+        if (auto result = m_Language->Poll()) ApplyLive(*result);
+
+        // The file in front, once typing in it has paused (the other open files' unsaved texts go along).
+        Document* doc = Current();
+        if (!doc) return;
+        double now = ImGui::GetTime();
+        uint64_t version = doc->Buffer.Version();
+        if (version != doc->SeenVersion)
+        {
+            doc->SeenVersion = version;
+            doc->EditTime = now;
+        }
+        if (doc->CheckedVersion == version || now - doc->EditTime < 0.35 || m_Language->Busy()) return;
+        std::vector<LanguageService::Overlay> overlays;
+        for (auto& d : m_Docs)
+            if (d.get() == doc || d->Buffer.IsDirty()) overlays.push_back({ d->Path, d->Buffer.GetText() });
+        doc->CheckedVersion = version;
+        m_LivePath = doc->Path;
+        m_Language->Request(doc->Path, std::move(overlays), version);
+    }
+
+    void CodeMode::ApplyLive(LanguageService::Result& result)
+    {
+        if (!result.Error.empty())
+        {
+            if (m_LiveError.empty()) Log::Error("Code Mode: live checking failed: {}", result.Error);
+            m_LiveError = result.Error;
+            return;
+        }
+        m_LiveError.clear();
+        if (m_LiveMs < 0.0) Log::Info("Code Mode: live checking ready ({} files of {} checked in {:.0f} ms)", result.Files.size(), result.Assembly, result.Milliseconds);
+        m_LiveMs = result.Milliseconds;
+        // Made for an older text of the file (typed in since): the next check replaces it.
+        std::string asked = PathKey(m_LivePath);
+        for (auto& doc : m_Docs)
+            if (PathKey(doc->Path) == asked && doc->Buffer.Version() != result.Tag) return;
+
+        // Everything known about the assembly's files is replaced by what the check found.
+        std::vector<std::string> keys;
+        for (const fs::path& f : result.Files) keys.push_back(PathKey(f));
+        std::sort(keys.begin(), keys.end());
+        for (auto& doc : m_Docs) DetachMarks(*doc);
+        std::erase_if(m_Problems, [&](const Problem& p) { return !p.Key.empty() && std::binary_search(keys.begin(), keys.end(), p.Key); });
+        for (Diagnostic& d : result.Diagnostics)
+        {
+            Problem p;
+            p.Path = fs::path(std::u8string(d.File.begin(), d.File.end())); // (UTF-8 from the service)
+            p.Key = PathKey(p.Path);
+            p.Live = true;
+            p.D = std::move(d);
+            m_Problems.push_back(std::move(p));
+        }
+        RebuildProblems();
     }
 
     void CodeMode::AttachMarks(Document& doc)
