@@ -697,6 +697,11 @@ namespace Editor
             ImGui::SameLine(0, 24);
             ImGui::TextDisabled("%d%%", (int)std::lround(m_Zoom * 100.0f));
         }
+        if (!m_Note.empty() && ImGui::GetTime() - m_NoteTime < 6.0)
+        {
+            ImGui::SameLine(0, 24);
+            ImGui::TextColored(ImVec4(0.95f, 0.8f, 0.45f, 1.0f), "%s", m_Note.c_str());
+        }
         // The problem counts (click: the Problems list) and how the build went.
         int errors = 0, warnings = 0;
         for (const Problem& p : m_Problems) (p.D.Level == Severity::Error ? errors : warnings)++;
@@ -1028,6 +1033,12 @@ namespace Editor
         }
         if (alt && !ctrl && (pressed(ImGuiKey_UpArrow) || pressed(ImGuiKey_DownArrow)))
             b.MoveLines(ImGui::IsKeyPressed(ImGuiKey_UpArrow) ? -1 : 1);
+        else if (alt && !ctrl && (pressed(ImGuiKey_LeftArrow) || pressed(ImGuiKey_RightArrow)))
+        {
+            GoBack(ImGui::IsKeyPressed(ImGuiKey_RightArrow));
+            return;
+        }
+        else if (alt && shift && !ctrl && pressed(ImGuiKey_F)) FormatCode(doc);
         else if (!alt)
         {
             if (pressed(ImGuiKey_LeftArrow)) b.MoveLeft(shift, ctrl), moved = true;
@@ -1070,6 +1081,8 @@ namespace Editor
                 FindNext(doc, shift);
             }
             else if (pressed(ImGuiKey_F8)) NextProblem(shift);
+            else if (pressed(ImGuiKey_F12)) AskAtCursor(doc, shift ? LanguageService::Query::References : LanguageService::Query::Definition);
+            else if (pressed(ImGuiKey_F2)) AskAtCursor(doc, LanguageService::Query::RenameCheck);
             else if (pressed(ImGuiKey_Escape) && b.HasSelection()) b.SetCursor(b.Cursor()), moved = true;
         }
 
@@ -1180,6 +1193,12 @@ namespace Editor
             }
             else if (clicks == 2) b.SelectWordAt(at);
             else if (clicks >= 3) b.SelectLines(at.Line, at.Line);
+            else if (ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift)
+            {
+                b.SetCursor(at);
+                m_DragLines = false;
+                AskAtCursor(doc, LanguageService::Query::Definition);
+            }
             else
             {
                 b.SetCursor(at, ImGui::GetIO().KeyShift);
@@ -1187,6 +1206,13 @@ namespace Editor
             }
             m_Dragging = clicks == 1 || mouse.x <= gutterRight;
             m_BlinkStart = ImGui::GetTime();
+        }
+        if (overText && mouse.x > gutterRight && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+        {
+            TextPos at = posAt(mouse);
+            if (!(b.HasSelection() && at >= b.SelStart() && at < b.SelEnd())) b.SetCursor(at);
+            m_Completion.Open = m_Completion.Waiting = false;
+            m_OpenCodeMenu = true;
         }
         if (m_Dragging)
         {
@@ -1415,6 +1441,8 @@ namespace Editor
         ImGui::PopStyleColor();
         ImGui::PopFont();
         DrawAssist(doc, text, charW, lineH, font, fontSize);
+        DrawCodeMenu(doc);
+        DrawRenamePopup();
     }
 
     // ---- Problems (the last build's errors and warnings)
@@ -1478,6 +1506,7 @@ namespace Editor
         if (!m_Language) return;
         if (auto result = m_Language->Poll()) ApplyLive(*result);
         PollAssist();
+        PollNavigation();
 
         // The file in front, once typing in it has paused (the other open files' unsaved texts go along).
         Document* doc = Current();
@@ -1620,7 +1649,26 @@ namespace Editor
         ImGui::BeginChild("##problems", size, ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
         int errors = 0, warnings = 0;
         for (const Problem& p : m_Problems) (p.D.Level == Severity::Error ? errors : warnings)++;
-        ImGui::TextDisabled("PROBLEMS");
+        // Its two lists.
+        auto tab = [&](const char* name, int index) {
+            bool on = m_BottomTab == index;
+            ImGui::PushStyleColor(ImGuiCol_Button, on ? ImGui::GetStyleColorVec4(ImGuiCol_TabSelected) : ImVec4(0, 0, 0, 0));
+            if (ImGui::SmallButton(name)) m_BottomTab = index;
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+        };
+        tab("PROBLEMS", 0);
+        char refs[64];
+        std::snprintf(refs, sizeof(refs), m_References.empty() ? "REFERENCES###refs" : "REFERENCES (%d)###refs", (int)m_References.size());
+        tab(refs, 1);
+        if (m_BottomTab == 1)
+        {
+            ImGui::SameLine(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - ImGui::CalcTextSize("x").x - ImGui::GetStyle().FramePadding.x * 2.0f);
+            if (ImGui::SmallButton("x")) m_ShowProblems = false;
+            DrawReferences();
+            ImGui::EndChild();
+            return;
+        }
         ImGui::SameLine(0, 16);
         char label[48];
         std::snprintf(label, sizeof(label), "Errors (%d)", errors);
@@ -2169,6 +2217,380 @@ namespace Editor
                 ImGui::PopTextWrapPos();
                 ImGui::End();
             }
+        }
+    }
+
+    // ---- Go to definition, references, rename, format
+
+    void CodeMode::Note(std::string message)
+    {
+        m_Note = std::move(message);
+        m_NoteTime = ImGui::GetTime();
+    }
+
+    void CodeMode::AskAtCursor(Document& doc, LanguageService::Query kind)
+    {
+        if (!m_Language)
+        {
+            Note("The language service isn't running (C# scripting is off)");
+            return;
+        }
+        TextBuffer& b = doc.Buffer;
+        TextPos c = b.Cursor();
+        uint64_t tag = m_NextTag++;
+        m_NavTag[(int)kind] = tag;
+        if (kind == LanguageService::Query::References) m_ReferencesWaiting = true;
+        if (kind == LanguageService::Query::RenameCheck)
+        {
+            m_RenameDoc = &doc;
+            m_RenamePos = c;
+        }
+        m_Language->Send({ kind, doc.Path, OverlaysFor(doc), c.Line, Code::ByteToUtf16(b.Line(c.Line), c.Col), tag });
+    }
+
+    void CodeMode::FormatCode(Document& doc)
+    {
+        if (!m_Language) return;
+        TextBuffer& b = doc.Buffer;
+        // The selected lines, else the whole file.
+        bool lines = b.HasSelection();
+        int first = lines ? b.SelStart().Line : 0, last = lines ? b.SelEnd().Line - (b.SelEnd().Col == 0 && b.SelEnd().Line > b.SelStart().Line ? 1 : 0) : -1;
+        uint64_t tag = m_NextTag++;
+        m_NavTag[(int)LanguageService::Query::Format] = tag;
+        m_AskedVersions.clear();
+        for (auto& d : m_Docs) m_AskedVersions.push_back({ d.get(), d->Buffer.Version() });
+        LanguageService::Question q{ LanguageService::Query::Format, doc.Path, OverlaysFor(doc), first, 0, tag };
+        q.EndLine = last;
+        q.Tabs = b.IndentUnit == "\t";
+        q.Crlf = b.UsesCrlf();
+        m_Language->Send(std::move(q));
+    }
+
+    void CodeMode::PollNavigation()
+    {
+        using Q = LanguageService::Query;
+        auto take = [&](Q kind) -> std::optional<LanguageService::Result> {
+            auto r = m_Language->Poll(kind);
+            if (!r || r->Tag != m_NavTag[(int)kind]) return std::nullopt;
+            if (!r->Error.empty())
+            {
+                Log::Error("Code Mode: {}", r->Error);
+                Note("The language service failed (see the Console)");
+                return std::nullopt;
+            }
+            return r;
+        };
+        if (auto r = take(Q::Definition))
+        {
+            if (!r->Message.empty()) Note(r->Message);
+            else if (!r->Locations.empty())
+            {
+                const auto& l = r->Locations[0];
+                NavigateTo(l.File, l.Line, l.Col, l.EndLine, l.EndCol);
+            }
+        }
+        if (auto r = take(Q::References))
+        {
+            m_ReferencesWaiting = false;
+            if (!r->Message.empty()) Note(r->Message);
+            else
+            {
+                m_References = std::move(r->Locations);
+                m_ReferencesName = r->Name;
+                m_SelectedReference = -1;
+                m_BottomTab = 1;
+                m_ShowProblems = true;
+                Note(std::to_string(m_References.size()) + " reference" + (m_References.size() == 1 ? "" : "s") + " to " + m_ReferencesName);
+            }
+        }
+        if (auto r = take(Q::RenameCheck))
+        {
+            if (!r->Message.empty()) Note(r->Message);
+            else
+            {
+                m_RenameOpen = m_FocusRename = true;
+                m_RenameOld = m_RenameName = r->Name;
+                m_RenameWarning = r->Warning;
+            }
+        }
+        if (auto r = take(Q::Rename))
+        {
+            if (!r->Message.empty()) Note(r->Message);
+            else
+            {
+                int files = 0;
+                if (!ApplyEdits(r->Edits, &files)) Note("The code changed while renaming: nothing was renamed");
+                else
+                {
+                    // The file named after the type too (and its tab).
+                    std::string renamedFile;
+                    if (!r->RenameFrom.empty() && !r->RenameTo.empty())
+                    {
+                        std::error_code ec;
+                        fs::rename(r->RenameFrom, r->RenameTo, ec);
+                        if (!ec)
+                        {
+                            for (auto& d : m_Docs)
+                                if (PathKey(d->Path) == PathKey(r->RenameFrom)) d->Path = r->RenameTo;
+                            renamedFile = ", file renamed to " + r->RenameTo.filename().string();
+                        }
+                    }
+                    Note("Renamed " + m_RenameOld + " to " + m_RenameName + ": " + std::to_string(r->Edits.size()) + " place" + (r->Edits.size() == 1 ? "" : "s") +
+                         " in " + std::to_string(files) + " file" + (files == 1 ? "" : "s") + renamedFile);
+                }
+            }
+        }
+        if (auto r = take(Q::Format))
+        {
+            if (r->Edits.empty()) Note("Already formatted");
+            else if (!ApplyEdits(r->Edits)) Note("The code changed while formatting: try again");
+        }
+    }
+
+    bool CodeMode::ApplyEdits(const std::vector<LanguageService::Edit>& edits, int* files)
+    {
+        // By file (each file's edits from the end back, so the places before them stay put).
+        std::vector<std::string> keys;
+        for (const auto& e : edits)
+            if (std::find(keys.begin(), keys.end(), PathKey(e.File)) == keys.end()) keys.push_back(PathKey(e.File));
+        auto docOf = [&](const std::string& key) -> Document* {
+            for (auto& d : m_Docs)
+                if (PathKey(d->Path) == key) return d.get();
+            return nullptr;
+        };
+        // Open files must still be what was asked about.
+        for (const std::string& key : keys)
+            if (Document* d = docOf(key))
+                for (auto& [doc, version] : m_AskedVersions)
+                    if (doc == d && d->Buffer.Version() != version) return false;
+        auto apply = [&](TextBuffer& b, const std::string& key) {
+            std::vector<const LanguageService::Edit*> mine;
+            for (const auto& e : edits)
+                if (PathKey(e.File) == key) mine.push_back(&e);
+            std::sort(mine.begin(), mine.end(), [](auto* x, auto* y) { return std::tie(x->Line, x->Col) > std::tie(y->Line, y->Col); });
+            TextPos cursor = b.Cursor();
+            b.BeginGroup();
+            for (const auto* e : mine)
+            {
+                int line = std::clamp(e->Line, 0, b.LineCount() - 1), endLine = std::clamp(e->EndLine, line, b.LineCount() - 1);
+                TextPos a{ line, Code::Utf16ToByte(b.Line(line), e->Col) }, z{ endLine, Code::Utf16ToByte(b.Line(endLine), e->EndCol) };
+                b.Replace(a, z, e->Text);
+            }
+            b.SetCursor(cursor);
+            b.EndGroup();
+        };
+        for (const std::string& key : keys)
+        {
+            if (Document* d = docOf(key))
+            {
+                apply(d->Buffer, key);
+                d->ScrollToCursor = true;
+                continue;
+            }
+            // A file not open: changed on disk.
+            fs::path path;
+            for (const auto& e : edits)
+                if (PathKey(e.File) == key) path = e.File;
+            std::string text;
+            if (!ReadFile(path, text)) continue;
+            TextBuffer b;
+            b.SetText(text);
+            apply(b, key);
+            std::ofstream(path, std::ios::binary) << b.GetText();
+        }
+        if (files) *files = (int)keys.size();
+        return true;
+    }
+
+    void CodeMode::NavigateTo(const fs::path& file, int line, int col16, int endLine, int endCol16, bool remember)
+    {
+        Document* from = Current();
+        if (remember && from)
+        {
+            m_Back.push_back({ from->Path, from->Buffer.Cursor() });
+            if (m_Back.size() > 100) m_Back.erase(m_Back.begin());
+            m_Forward.clear();
+        }
+        if (!OpenFile(file)) return;
+        Document* doc = Current();
+        if (!doc) return;
+        TextBuffer& b = doc->Buffer;
+        line = std::clamp(line, 0, b.LineCount() - 1);
+        TextPos a{ line, Code::Utf16ToByte(b.Line(line), col16) };
+        if (endLine >= 0 && endLine < b.LineCount() && endLine == line && endCol16 > col16)
+            b.SetSelection(a, { endLine, Code::Utf16ToByte(b.Line(endLine), endCol16) });
+        else b.SetCursor(a);
+        b.BreakMerge();
+        doc->ScrollToCursor = true;
+        m_FocusCode = true;
+        m_BlinkStart = ImGui::GetTime();
+    }
+
+    void CodeMode::GoBack(bool forward)
+    {
+        auto& from = forward ? m_Forward : m_Back;
+        auto& to = forward ? m_Back : m_Forward;
+        if (from.empty()) return;
+        NavPoint p = from.back();
+        from.pop_back();
+        if (Document* cur = Current()) to.push_back({ cur->Path, cur->Buffer.Cursor() });
+        if (!OpenFile(p.Path)) return;
+        if (Document* doc = Current())
+        {
+            doc->Buffer.SetCursor(p.Pos);
+            doc->ScrollToCursor = true;
+        }
+        m_FocusCode = true;
+    }
+
+    void CodeMode::DrawReferences()
+    {
+        if (m_ReferencesWaiting)
+        {
+            ImGui::TextDisabled("Finding references...");
+            return;
+        }
+        if (m_References.empty())
+        {
+            ImGui::TextDisabled("Put the cursor on a name and press Shift+F12 to list everywhere it is used.");
+            return;
+        }
+        fs::path project = Project::GetDirectory();
+        if (ImGui::BeginTable("##references", 3, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV,
+                              ImGui::GetContentRegionAvail()))
+        {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthFixed, 240.0f);
+            ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("0000:000").x + 8.0f);
+            ImGui::TableSetupColumn("Code", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+            ImFont* mono = ImGuiLayer::GetMonoFont();
+            for (int i = 0; i < (int)m_References.size(); ++i)
+            {
+                const auto& r = m_References[(size_t)i];
+                ImGui::PushID(i);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                if (ImGui::Selectable("##row", m_SelectedReference == i, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
+                {
+                    m_SelectedReference = i;
+                    NavigateTo(r.File, r.Line, r.Col, r.EndLine, r.EndCol);
+                }
+                ImGui::SameLine(0, 0);
+                std::error_code ec;
+                fs::path rel = fs::relative(r.File, project, ec);
+                ImGui::TextUnformatted((ec || rel.empty() ? r.File : rel).generic_string().c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%d:%d", r.Line + 1, r.Col + 1);
+                ImGui::TableNextColumn();
+                // The line, its name highlighted (the definition marked).
+                std::string line = r.Text;
+                int a = std::min((int)line.size(), Code::Utf16ToByte(line, r.Col));
+                int z = r.EndLine == r.Line ? std::max(a, std::min((int)line.size(), Code::Utf16ToByte(line, r.EndCol))) : a;
+                int lead = (int)std::min(line.find_first_not_of(" \t"), line.size());
+                lead = std::min(lead, a);
+                if (mono) ImGui::PushFont(mono, 0.0f);
+                ImGui::TextUnformatted(line.substr((size_t)lead, (size_t)(a - lead)).c_str());
+                ImGui::SameLine(0, 0);
+                ImGui::TextColored(ImGuiLayer::IsLightTheme() ? ImVec4(0.0f, 0.35f, 0.8f, 1.0f) : ImVec4(0.45f, 0.75f, 1.0f, 1.0f), "%s", line.substr((size_t)a, (size_t)(z - a)).c_str());
+                ImGui::SameLine(0, 0);
+                ImGui::TextUnformatted(line.substr((size_t)z).c_str());
+                if (mono) ImGui::PopFont();
+                if (r.Definition)
+                {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(definition)");
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    void CodeMode::DrawRenamePopup()
+    {
+        if (m_RenameOpen)
+        {
+            ImGui::OpenPopup("Rename##code");
+            m_RenameOpen = false;
+        }
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (!ImGui::BeginPopupModal("Rename##code", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+        ImGui::Text("Rename %s to:", m_RenameOld.c_str());
+        if (m_FocusRename)
+        {
+            ImGui::SetKeyboardFocusHere();
+            m_FocusRename = false;
+        }
+        ImGui::SetNextItemWidth(320.0f);
+        bool enter = ImGui::InputText("##newname", &m_RenameName, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+        if (!m_RenameWarning.empty())
+        {
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 320.0f);
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "%s", m_RenameWarning.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::TextDisabled("Every use in the scripts changes (open files stay unsaved).");
+        bool go = ImGui::Button("Rename") || enter;
+        ImGui::SameLine();
+        bool cancel = ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape);
+        if (go && m_RenameName != m_RenameOld && !m_RenameName.empty() && m_RenameDoc && m_Language)
+        {
+            // Asked about the text as it is now (the edits are checked against these versions before going in).
+            bool open = false;
+            for (auto& d : m_Docs) open |= d.get() == m_RenameDoc;
+            if (open)
+            {
+                m_AskedVersions.clear();
+                for (auto& d : m_Docs) m_AskedVersions.push_back({ d.get(), d->Buffer.Version() });
+                uint64_t tag = m_NextTag++;
+                m_NavTag[(int)LanguageService::Query::Rename] = tag;
+                TextBuffer& b = m_RenameDoc->Buffer;
+                int line = std::min(m_RenamePos.Line, b.LineCount() - 1);
+                LanguageService::Question q{ LanguageService::Query::Rename, m_RenameDoc->Path, OverlaysFor(*m_RenameDoc), line,
+                                             Code::ByteToUtf16(b.Line(line), m_RenamePos.Col), tag };
+                q.NewName = m_RenameName;
+                m_Language->Send(std::move(q));
+            }
+        }
+        if (go || cancel)
+        {
+            ImGui::CloseCurrentPopup();
+            m_FocusCode = true;
+        }
+        ImGui::EndPopup();
+    }
+
+    void CodeMode::DrawCodeMenu(Document& doc)
+    {
+        // Right-click in the code (the cursor goes there first, unless it is in the selection).
+        if (m_OpenCodeMenu)
+        {
+            ImGui::OpenPopup("##codemenu");
+            m_OpenCodeMenu = false;
+        }
+        if (ImGui::BeginPopup("##codemenu"))
+        {
+            using Q = LanguageService::Query;
+            bool on = m_Language != nullptr;
+            if (ImGui::MenuItem("Go to Definition", "F12", false, on)) AskAtCursor(doc, Q::Definition);
+            if (ImGui::MenuItem("Find References", "Shift+F12", false, on)) AskAtCursor(doc, Q::References);
+            if (ImGui::MenuItem("Rename...", "F2", false, on)) AskAtCursor(doc, Q::RenameCheck);
+            ImGui::Separator();
+            if (ImGui::MenuItem(doc.Buffer.HasSelection() ? "Format Selection" : "Format Document", "Shift+Alt+F", false, on)) FormatCode(doc);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Cut", "Ctrl+X", false, doc.Buffer.HasSelection()))
+            {
+                ImGui::SetClipboardText(doc.Buffer.SelectedText().c_str());
+                doc.Buffer.DeleteSelection();
+            }
+            if (ImGui::MenuItem("Copy", "Ctrl+C", false, doc.Buffer.HasSelection())) ImGui::SetClipboardText(doc.Buffer.SelectedText().c_str());
+            if (ImGui::MenuItem("Paste", "Ctrl+V"))
+                if (const char* clip = ImGui::GetClipboardText()) doc.Buffer.Insert(clip);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Back", "Alt+Left", false, !m_Back.empty())) GoBack(false);
+            if (ImGui::MenuItem("Forward", "Alt+Right", false, !m_Forward.empty())) GoBack(true);
+            ImGui::EndPopup();
         }
     }
 }

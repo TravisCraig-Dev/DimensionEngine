@@ -96,6 +96,20 @@ namespace Editor
         void AcceptCompletion(Document& doc);
         bool AssistKeys(Document& doc); // the keys the open list or hints take (true: one was taken)
         void DrawAssist(Document& doc, ImVec2 text, float charW, float lineH, ImFont* font, float fontSize);
+        // Go to definition (F12, Ctrl+click), find references (Shift+F12), rename (F2), format (Shift+Alt+F), and back /
+        // forward through the places gone to (Alt+Left / Alt+Right).
+        void AskAtCursor(Document& doc, Dimension::LanguageService::Query kind);
+        void FormatCode(Document& doc);
+        void PollNavigation();
+        // Changes the service worked out (rename, format) made: in open files' buffers (one undo step each), else on disk.
+        // False when an open file changed since it was asked about.
+        bool ApplyEdits(const std::vector<Dimension::LanguageService::Edit>& edits, int* files = nullptr);
+        void NavigateTo(const fs::path& file, int line, int col16, int endLine, int endCol16, bool remember = true);
+        void GoBack(bool forward);
+        void DrawReferences();
+        void DrawRenamePopup();
+        void DrawCodeMenu(Document& doc);
+        void Note(std::string message); // a passing message in the status bar
         void DrawPopups();
         void HandleKeys(Document& doc, int pageLines);
         void TypeText(Document& doc, const std::string& text);
@@ -178,6 +192,27 @@ namespace Editor
             uint64_t Tag = 0;
             std::string Text, Info;
         } m_Hover;
+
+        // Navigation, references, rename, format.
+        uint64_t m_NavTag[(int)Dimension::LanguageService::Query::Count] = {};
+        std::vector<std::pair<Document*, uint64_t>> m_AskedVersions; // the open files' versions when rename/format was asked
+        std::vector<Dimension::LanguageService::Location> m_References;
+        std::string m_ReferencesName;
+        bool m_ReferencesWaiting = false;
+        int m_BottomTab = 0, m_SelectedReference = -1; // (0 problems, 1 references)
+        struct NavPoint
+        {
+            fs::path Path;
+            Dimension::Code::TextPos Pos;
+        };
+        std::vector<NavPoint> m_Back, m_Forward;
+        bool m_RenameOpen = false, m_FocusRename = false;
+        std::string m_RenameName, m_RenameOld, m_RenameWarning;
+        Document* m_RenameDoc = nullptr;
+        Dimension::Code::TextPos m_RenamePos;
+        std::string m_Note;
+        double m_NoteTime = 0.0;
+        bool m_OpenCodeMenu = false;
 
         // Popups: a tab's unsaved changes, new script/folder, rename, delete.
         int m_ConfirmClose = -1;

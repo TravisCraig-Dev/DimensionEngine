@@ -79,6 +79,10 @@ namespace Dimension::Code
         void DeleteLines();
         void MoveLines(int direction); // the selected lines up (-1) or down (+1) past their neighbour
 
+        // Several edits as one undo step (between these; they nest).
+        void BeginGroup() { Begin(Merge::None); }
+        void EndGroup() { End(); }
+
         bool CanUndo() const { return !m_Undo.empty(); }
         bool CanRedo() const { return !m_Redo.empty(); }
         bool Undo();

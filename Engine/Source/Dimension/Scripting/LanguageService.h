@@ -35,6 +35,7 @@ namespace Dimension
         enum class Query : uint8_t
         {
             Completion, Signature, Hover, // (in the order they are answered)
+            Definition, References, RenameCheck, Rename, Format,
             Diagnostics,
             Count
         };
@@ -45,6 +46,9 @@ namespace Dimension
             std::vector<Overlay> Overlays;
             int Line = 0, Col = 0; // the place asked about (0-based; UTF-16 column)
             uint64_t Tag = 0;      // comes back with the result (to tell which edit or place it was for)
+            std::string NewName;   // Rename: to what
+            int EndLine = -1;      // Format: the last line of the lines to format (-1: the whole file)
+            bool Tabs = false, Crlf = false; // Format: the file's indentation and line ends
         };
         void Send(Question question);
         // Check the assembly `file` is in.
@@ -70,6 +74,21 @@ namespace Dimension
             std::vector<SignatureParam> Params;
         };
 
+        // A place in a file (definitions, references) and a change to make there (rename, format).
+        struct Location
+        {
+            fs::path File;
+            int Line = 0, Col = 0, EndLine = 0, EndCol = 0; // (UTF-16 columns)
+            std::string Text;      // References: the line's text
+            bool Definition = false;
+        };
+        struct Edit
+        {
+            fs::path File;
+            int Line = 0, Col = 0, EndLine = 0, EndCol = 0; // (UTF-16 columns, in the text the question was about)
+            std::string Text;
+        };
+
         struct Result
         {
             uint64_t Tag = 0;
@@ -86,6 +105,11 @@ namespace Dimension
             int ActiveSignature = 0, ActiveParam = 0;
             // Hover
             std::string HoverText, HoverDoc;
+            // Definition, references, rename, format
+            std::vector<Location> Locations;
+            std::vector<Edit> Edits;
+            std::string Name, Message, Warning;     // what was asked about; why there is no answer; a caution
+            fs::path RenameFrom, RenameTo;          // Rename: the file named after a renamed type, and its new name
         };
         // The newest finished result of a kind, once.
         std::optional<Result> Poll(Query kind = Query::Diagnostics);

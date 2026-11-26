@@ -105,12 +105,20 @@ namespace Dimension
                     }
                 m_Working = (int)job.Kind;
             }
-            static const char* kKinds[] = { "completion", "signature", "hover", "diagnostics" };
+            static const char* kKinds[] = { "completion", "signature", "hover", "definition", "references", "renameCheck", "rename", "format", "diagnostics" };
+            static_assert(sizeof(kKinds) / sizeof(kKinds[0]) == (size_t)Query::Count);
             nlohmann::json request;
             request["kind"] = kKinds[(int)job.Kind];
             request["line"] = job.Line;
             request["col"] = job.Col;
             request["file"] = Utf8Path(job.File);
+            if (job.Kind == Query::Rename) request["newName"] = job.NewName;
+            if (job.Kind == Query::Format)
+            {
+                request["endLine"] = job.EndLine;
+                request["tabs"] = job.Tabs;
+                request["crlf"] = job.Crlf;
+            }
             request["overlays"] = nlohmann::json::array();
             for (const Overlay& o : job.Overlays) request["overlays"].push_back({ { "path", Utf8Path(o.Path) }, { "text", o.Text } });
             std::string answer;
@@ -186,7 +194,27 @@ namespace Dimension
             r.ActiveSignature = j.value("active", 0);
             r.ActiveParam = j.value("param", 0);
         }
-        r.HoverText = j.value("text", std::string());
+        auto places = [&](const char* key, auto add) {
+            if (j.contains(key) && j[key].is_array())
+                for (const auto& l : j[key]) add(l);
+        };
+        places("locations", [&](const nlohmann::json& l) {
+            r.Locations.push_back({ PathFromUtf8(l.value("file", std::string())), l.value("line", 0), l.value("col", 0), l.value("endLine", 0), l.value("endCol", 0),
+                                    l.value("text", std::string()), l.value("definition", false) });
+        });
+        places("edits", [&](const nlohmann::json& e) {
+            r.Edits.push_back({ PathFromUtf8(e.value("file", std::string())), e.value("line", 0), e.value("col", 0), e.value("endLine", 0), e.value("endCol", 0),
+                                e.value("text", std::string()) });
+        });
+        r.Name = j.value("name", std::string());
+        r.Message = j.value("message", std::string());
+        r.Warning = j.value("warning", std::string());
+        if (j.contains("renameFile") && j["renameFile"].is_object())
+        {
+            r.RenameFrom = PathFromUtf8(j["renameFile"].value("from", std::string()));
+            r.RenameTo = PathFromUtf8(j["renameFile"].value("to", std::string()));
+        }
+        r.HoverText = j.is_object() && j.contains("text") && j["text"].is_string() ? j["text"].get<std::string>() : std::string();
         r.HoverDoc = j.value("doc", std::string());
         return r;
     }

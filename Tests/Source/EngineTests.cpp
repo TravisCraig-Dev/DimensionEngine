@@ -21974,6 +21974,65 @@ namespace
         r = ask(Q::Hover, code, 6, 20); // LookAt
         CHECK(r.HoverText.find("Transform.LookAt(") != std::string::npos && !r.HoverDoc.empty());
         CHECK(ask(Q::Hover, code, 4, 4).HoverText.empty()); // ({)
+
+        // Go to definition, find references, rename, format (the files as saved: Mover uses Helper.Step).
+        std::string mover = "using Dimension;\npublic class Mover : Behaviour\n{\n    List<int> m_Steps = new();\n    public override void OnUpdate(float dt) { Helper.Step(dt); Helper.Step(dt * 2); }\n}\n";
+        std::ofstream(a, std::ios::binary) << mover;
+        auto askFile = [&](Q kind, int line, int col, std::string newName = {}) {
+            LanguageService::Question q{ kind, a, {}, line, col, 11 };
+            q.NewName = std::move(newName);
+            service.Send(std::move(q));
+            for (int i = 0; i < 600; ++i)
+            {
+                if (auto r = service.Poll(kind)) return *r;
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            return LanguageService::Result{ 0, "", {}, {}, 0.0, "timed out" };
+        };
+        int stepCol = (int)std::string("    public override void OnUpdate(float dt) { Helper.").size();
+        r = askFile(Q::Definition, 4, stepCol + 1);
+        CHECK(r.Error.empty() && r.Locations.size() == 1);
+        if (!r.Locations.empty()) CHECK(fs::equivalent(r.Locations[0].File, b, ec) && r.Locations[0].Line == 2 && r.Locations[0].Col == 23);
+        r = askFile(Q::Definition, 1, 22); // Behaviour: in Dimension.Core
+        CHECK(r.Locations.empty() && r.Message.find("Dimension.Core") != std::string::npos);
+        r = askFile(Q::References, 4, stepCol + 1);
+        if (!r.Error.empty()) std::printf("  %s\n", r.Error.c_str());
+        CHECK(r.Error.empty() && r.Name == "Step" && r.Locations.size() == 3); // (its declaration and two calls)
+        int definitions = 0;
+        for (auto& l : r.Locations) definitions += l.Definition;
+        CHECK(definitions == 1);
+        // Rename: checked first (OnUpdate keeps the engine's name), then every use and the file named after the class.
+        CHECK(!askFile(Q::RenameCheck, 4, 27).Message.empty());
+        r = askFile(Q::RenameCheck, 1, 15);
+        CHECK(r.Message.empty() && r.Name == "Mover" && !r.Warning.empty());
+        r = askFile(Q::Rename, 4, stepCol + 1, "Advance");
+        CHECK(r.Error.empty() && r.Edits.size() == 3 && r.RenameFrom.empty());
+        for (auto& e : r.Edits) CHECK(e.Text == "Advance");
+        CHECK(!askFile(Q::Rename, 4, stepCol + 1, "class").Message.empty()); // (a keyword)
+        r = askFile(Q::Rename, 1, 15, "Runner");
+        CHECK(r.Edits.size() == 1 && fs::equivalent(r.RenameFrom, a, ec) && r.RenameTo.filename() == "Runner.cs");
+        // Format: Roslyn's layout (braces on their own lines, spaces around operators).
+        std::ofstream(a, std::ios::binary) << "public class Mover\n{\n  void F( ){int x=1;}\n}\n";
+        LanguageService::Question fq{ Q::Format, a, {}, 0, 0, 12 };
+        service.Send(std::move(fq));
+        std::optional<LanguageService::Result> formatted;
+        for (int i = 0; i < 600 && !formatted; ++i)
+        {
+            formatted = service.Poll(Q::Format);
+            if (!formatted) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        CHECK(formatted && formatted->Error.empty() && !formatted->Edits.empty());
+        if (formatted)
+        {
+            if (!formatted->Error.empty()) std::printf("  %s\n", formatted->Error.c_str());
+            Dimension::Code::TextBuffer tb;
+            tb.SetText("public class Mover\n{\n  void F( ){int x=1;}\n}\n");
+            auto edits = formatted->Edits;
+            std::sort(edits.begin(), edits.end(), [](auto& x, auto& y) { return std::tie(x.Line, x.Col) > std::tie(y.Line, y.Col); });
+            for (auto& e : edits) tb.Replace({ e.Line, e.Col }, { e.EndLine, e.EndCol }, e.Text);
+            CHECK(tb.GetText() == "public class Mover\n{\n    void F() { int x = 1; }\n}\n");
+            if (tb.GetText() != "public class Mover\n{\n    void F() { int x = 1; }\n}\n") std::printf("  formatted:\n%s\n", tb.GetText().c_str());
+        }
         fs::remove_all(project, ec);
     }
 

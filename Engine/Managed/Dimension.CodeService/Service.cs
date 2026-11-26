@@ -104,6 +104,8 @@ namespace Dimension.CodeService
                 line = Math.Clamp(line, 0, text.Lines.Count - 1);
                 int position = Math.Min(text.Lines[line].Start + Math.Max(0, col), text.Lines[line].End);
                 var model = compilation.GetSemanticModel(tree);
+                string path = Path.GetFullPath(file);
+                UnitWorkspace Space() => unit.Space(compilation);
                 using var output = new MemoryStream();
                 using (var w = new Utf8JsonWriter(output))
                 {
@@ -113,6 +115,16 @@ namespace Dimension.CodeService
                         case "completion": Queries.Completion(model, position, w); break;
                         case "signature": Queries.Signature(model, position, w); break;
                         case "hover": Queries.Hover(model, position, w); break;
+                        case "definition": Navigation.Definition(model, position, w); break;
+                        case "references": Navigation.References(Space(), path, position, w); break;
+                        case "renameCheck":
+                        case "rename":
+                            Navigation.Rename(Space(), path, position, root.TryGetProperty("newName", out var n) ? n.GetString() : "", kind == "renameCheck", w);
+                            break;
+                        case "format":
+                            Navigation.Format(Space(), path, line, root.TryGetProperty("endLine", out var e) ? e.GetInt32() : -1,
+                                              root.TryGetProperty("tabs", out var t) && t.GetBoolean(), root.TryGetProperty("crlf", out var cr) && cr.GetBoolean(), w);
+                            break;
                     }
                     w.WriteNumber("ms", watch.Elapsed.TotalMilliseconds);
                     w.WriteEndObject();
@@ -319,6 +331,15 @@ namespace Dimension.CodeService
         }
 
         public bool Contains(string path) => path != null && m_FileSet.Contains(path);
+        private UnitWorkspace m_Space;
+        // The unit as a workspace (references, rename, format), up to date with `compilation` (the last Compile's).
+        public UnitWorkspace Space(CSharpCompilation compilation)
+        {
+            m_Space ??= new UnitWorkspace();
+            m_Space.Sync(this, compilation);
+            return m_Space;
+        }
+
         public SyntaxTree TreeOf(string path) => m_Trees.TryGetValue(path, out var t) ? t.Tree : null;
 
         public CSharpCompilation Compile(Dictionary<string, string> overlays)

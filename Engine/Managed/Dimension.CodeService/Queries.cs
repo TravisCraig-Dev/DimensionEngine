@@ -342,26 +342,38 @@ namespace Dimension.CodeService
 
         // ---- Hover
 
-        public static void Hover(SemanticModel model, int position, Utf8JsonWriter w)
+        // The symbol a name at `position` refers to or declares (also with the place just after the name).
+        public static ISymbol SymbolAt(SemanticModel model, int position)
         {
             var root = model.SyntaxTree.GetRoot();
-            var token = root.FindToken(position);
-            ISymbol symbol = null;
-            if (token.Span.Contains(position) && (token.IsKind(SyntaxKind.IdentifierToken) || SyntaxFacts.IsPredefinedType(token.Kind()) ||
-                                                  token.IsKind(SyntaxKind.BaseKeyword) || token.IsKind(SyntaxKind.ThisKeyword)))
+            foreach (int at in new[] { position, position - 1 })
             {
+                if (at < 0) continue;
+                var token = root.FindToken(at);
+                if (!token.Span.Contains(at) || !(token.IsKind(SyntaxKind.IdentifierToken) || SyntaxFacts.IsPredefinedType(token.Kind()) ||
+                                                  token.IsKind(SyntaxKind.BaseKeyword) || token.IsKind(SyntaxKind.ThisKeyword)))
+                    continue;
                 // The name's own node: what it refers to, or what it declares (a method's name, a variable's...).
                 var node = token.Parent;
                 var info = model.GetSymbolInfo(node);
-                symbol = info.Symbol ?? info.CandidateSymbols.FirstOrDefault() ?? model.GetDeclaredSymbol(node);
+                var symbol = info.Symbol ?? info.CandidateSymbols.FirstOrDefault() ?? model.GetDeclaredSymbol(node);
                 if (symbol == null && node.Parent != null && node.Parent is not StatementSyntax)
                 {
                     info = model.GetSymbolInfo(node.Parent);
                     symbol = info.Symbol ?? info.CandidateSymbols.FirstOrDefault();
                 }
+                if (symbol is IMethodSymbol { ReducedFrom: not null } reduced) symbol = reduced.ReducedFrom;
+                if (symbol != null) return symbol;
             }
+            return null;
+        }
+
+        public static void Hover(SemanticModel model, int position, Utf8JsonWriter w)
+        {
+            ISymbol symbol = null;
+            var token = model.SyntaxTree.GetRoot().FindToken(position);
+            if (token.Span.Contains(position)) symbol = SymbolAt(model, position);
             if (symbol == null) return;
-            if (symbol is IMethodSymbol { ReducedFrom: not null } reduced) symbol = reduced;
             w.WriteString("text", Prefix(symbol) + Display(symbol, model, position));
             w.WriteString("doc", Summary(symbol));
         }
@@ -395,7 +407,7 @@ namespace Dimension.CodeService
             miscellaneousOptions: SymbolDisplayMiscellaneousOptions.UseSpecialTypes | SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers |
                                   SymbolDisplayMiscellaneousOptions.UseErrorTypeSymbolName);
 
-        private static string Display(ISymbol symbol, SemanticModel model, int position)
+        public static string Display(ISymbol symbol, SemanticModel model, int position)
         {
             try
             {
