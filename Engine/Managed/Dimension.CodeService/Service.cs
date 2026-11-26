@@ -92,6 +92,7 @@ namespace Dimension.CodeService
 
             var watch = Stopwatch.StartNew();
             string kind = root.TryGetProperty("kind", out var k) ? k.GetString() : "diagnostics";
+            if (kind == "build") return Builder.Build(s_Project, AnalyzerOptions());
             var unit = s_Project.UnitOf(Path.GetFullPath(file));
             var compilation = unit.Compile(overlays);
             if (kind != "diagnostics")
@@ -220,11 +221,16 @@ namespace Dimension.CodeService
                 }
                 if (Service.PathComparer.Equals(d, ScriptsDir)) break;
             }
-            if (!m_Units.TryGetValue(name, out var unit)) m_Units[name] = unit = new Unit(this, name, dir);
+            return UnitNamed(name, dir);
+        }
+
+        public Unit UnitNamed(string name, string dir)
+        {
+            if (!m_Units.TryGetValue(name, out var unit) || !Service.PathComparer.Equals(unit.Directory, dir)) m_Units[name] = unit = new Unit(this, name, dir);
             return unit;
         }
 
-        private static string AsmdefName(string asmdef)
+        internal static string AsmdefName(string asmdef)
         {
             try
             {
@@ -239,7 +245,7 @@ namespace Dimension.CodeService
 
         // What an assembly compiles against: the .NET framework (the running one's assemblies: no SDK needed), the
         // engine's API, and the built assemblies beside the scripts (other script assemblies, NuGet packages' DLLs).
-        public List<MetadataReference> References(string ownName)
+        public List<MetadataReference> References(string ownName, ISet<string> leaveOut = null)
         {
             var paths = new List<string>();
             if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is string tpa)
@@ -247,7 +253,9 @@ namespace Dimension.CodeService
             paths.Add(Path.Combine(ManagedDir, "Dimension.Core.dll"));
             if (Directory.Exists(AssembliesDir))
                 foreach (string dll in Directory.EnumerateFiles(AssembliesDir, "*.dll"))
-                    if (!string.Equals(Path.GetFileNameWithoutExtension(dll), ownName, StringComparison.OrdinalIgnoreCase)) paths.Add(dll);
+                    if (!string.Equals(Path.GetFileNameWithoutExtension(dll), ownName, StringComparison.OrdinalIgnoreCase) &&
+                        (leaveOut == null || !leaveOut.Contains(Path.GetFileNameWithoutExtension(dll))))
+                        paths.Add(dll);
             var refs = new List<MetadataReference>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string p in paths)
@@ -331,6 +339,7 @@ namespace Dimension.CodeService
         }
 
         public bool Contains(string path) => path != null && m_FileSet.Contains(path);
+        public CSharpCompilationOptions Options => m_Options;
         private UnitWorkspace m_Space;
         // The unit as a workspace (references, rename, format), up to date with `compilation` (the last Compile's).
         public UnitWorkspace Space(CSharpCompilation compilation)
@@ -342,7 +351,9 @@ namespace Dimension.CodeService
 
         public SyntaxTree TreeOf(string path) => m_Trees.TryGetValue(path, out var t) ? t.Tree : null;
 
-        public CSharpCompilation Compile(Dictionary<string, string> overlays)
+        // `built`: for a build, the assemblies of this build it uses (in place of their files beside the scripts, which
+        // `leaveOut` names).
+        public CSharpCompilation Compile(Dictionary<string, string> overlays, List<MetadataReference> built = null, ISet<string> leaveOut = null)
         {
             ReadProject();
             // The sources: every .cs under the folder, but not build output or folders that are assemblies of their own.
@@ -364,7 +375,8 @@ namespace Dimension.CodeService
             }
             foreach (string gone in m_Trees.Keys.Where(k => !m_FileSet.Contains(k)).ToList()) m_Trees.Remove(gone);
             if (m_GlobalUsings != null) trees.Add(m_GlobalUsings);
-            var references = m_Project.References(Name);
+            var references = m_Project.References(Name, leaveOut);
+            if (built != null) references.AddRange(built);
             bool sameReferences = m_CompiledReferences != null && m_CompiledReferences.Count == references.Count &&
                                   m_CompiledReferences.Zip(references).All(r => ReferenceEquals(r.First, r.Second));
             if (m_Compilation != null && sameReferences && m_CompiledTrees.Count == trees.Count &&
@@ -449,9 +461,9 @@ namespace Dimension.CodeService
                                                      concurrentBuild: true);
             // ImplicitUsings: the global usings the SDK writes for Microsoft.NET.Sdk.
             m_GlobalUsings = On(Prop("ImplicitUsings", "disable"))
-                ? CSharpSyntaxTree.ParseText("global using global::System;\nglobal using global::System.Collections.Generic;\nglobal using global::System.IO;\n" +
+                ? CSharpSyntaxTree.ParseText(SourceText.From("global using global::System;\nglobal using global::System.Collections.Generic;\nglobal using global::System.IO;\n" +
                                              "global using global::System.Linq;\nglobal using global::System.Net.Http;\nglobal using global::System.Threading;\n" +
-                                             "global using global::System.Threading.Tasks;\n", m_Parse, "GlobalUsings.g.cs")
+                                             "global using global::System.Threading.Tasks;\n", Encoding.UTF8), m_Parse, "GlobalUsings.g.cs")
                 : null;
             m_Trees.Clear(); // (parsed with the old options)
             m_Compilation = null;

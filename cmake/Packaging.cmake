@@ -23,7 +23,8 @@ install(DIRECTORY "${CMAKE_BINARY_DIR}/bin/managed/" DESTINATION bin/managed OPT
         PATTERN "*.pdb" EXCLUDE)
 # The .NET runtime itself, in bin/dotnet (CSharpRuntime::Init looks there before the machine's): C# scripts run on a
 # machine without .NET. The newest 10.x runtime and host resolver installed here (`dotnet --list-runtimes`).
-# (Compiling scripts that change still needs the .NET SDK; the sample's come compiled, below.)
+# (The editor compiles changed scripts itself with Roslyn, except projects with NuGet packages, which need the .NET SDK;
+# the sample's come compiled, below.)
 find_program(DIM_DOTNET dotnet)
 set(_dotnet_framework "")
 if(DIM_DOTNET)

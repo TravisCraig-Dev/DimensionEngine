@@ -36,6 +36,7 @@ namespace Dimension
         {
             Completion, Signature, Hover, // (in the order they are answered)
             Definition, References, RenameCheck, Rename, Format,
+            Build,       // every script assembly compiled and written beside the scripts (no file or place)
             Diagnostics,
             Count
         };
@@ -110,6 +111,9 @@ namespace Dimension
             std::vector<Edit> Edits;
             std::string Name, Message, Warning;     // what was asked about; why there is no answer; a caution
             fs::path RenameFrom, RenameTo;          // Rename: the file named after a renamed type, and its new name
+            // Build
+            bool Succeeded = false;
+            std::vector<std::string> Built;         // the assemblies written
         };
         // The newest finished result of a kind, once.
         std::optional<Result> Poll(Query kind = Query::Diagnostics);

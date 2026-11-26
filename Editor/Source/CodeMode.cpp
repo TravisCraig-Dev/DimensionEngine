@@ -1497,12 +1497,7 @@ namespace Editor
 
     void CodeMode::UpdateLive()
     {
-        if (!m_Language && !m_LanguageTried && CSharpRuntime::IsAvailable())
-        {
-            m_LanguageTried = true;
-            auto service = std::make_unique<LanguageService>();
-            if (service->Start(Platform::ExecutableDirectory() / "managed", Project::GetDirectory())) m_Language = std::move(service);
-        }
+        m_Language = Language ? Language() : nullptr;
         if (!m_Language) return;
         if (auto result = m_Language->Poll()) ApplyLive(*result);
         PollAssist();

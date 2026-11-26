@@ -105,7 +105,7 @@ namespace Dimension
                     }
                 m_Working = (int)job.Kind;
             }
-            static const char* kKinds[] = { "completion", "signature", "hover", "definition", "references", "renameCheck", "rename", "format", "diagnostics" };
+            static const char* kKinds[] = { "completion", "signature", "hover", "definition", "references", "renameCheck", "rename", "format", "build", "diagnostics" };
             static_assert(sizeof(kKinds) / sizeof(kKinds[0]) == (size_t)Query::Count);
             nlohmann::json request;
             request["kind"] = kKinds[(int)job.Kind];
@@ -206,6 +206,10 @@ namespace Dimension
             r.Edits.push_back({ PathFromUtf8(e.value("file", std::string())), e.value("line", 0), e.value("col", 0), e.value("endLine", 0), e.value("endCol", 0),
                                 e.value("text", std::string()) });
         });
+        r.Succeeded = j.value("succeeded", false);
+        if (j.contains("built") && j["built"].is_array())
+            for (const auto& b : j["built"])
+                if (b.is_string()) r.Built.push_back(b.get<std::string>());
         r.Name = j.value("name", std::string());
         r.Message = j.value("message", std::string());
         r.Warning = j.value("warning", std::string());

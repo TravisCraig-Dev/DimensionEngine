@@ -34,6 +34,8 @@ namespace Editor
         // Set by the editor: build the scripts now, and how the last build went (0 none, 1 building, 2 ok, 3 failed).
         std::function<void()> BuildScripts;
         std::function<int()> BuildState;
+        // The editor's language service (null when C# scripting is off).
+        std::function<Dimension::LanguageService*()> Language;
         // The last build's errors and warnings: listed, and underlined in the files (the list opens when it failed).
         void SetBuildResult(std::vector<Dimension::Code::Diagnostic> diagnostics, bool succeeded);
 
@@ -153,8 +155,7 @@ namespace Editor
         int m_SelectedProblem = -1;
 
         // The language service (Roslyn in the editor's .NET): started with Code Mode when C# scripting runs.
-        std::unique_ptr<Dimension::LanguageService> m_Language;
-        bool m_LanguageTried = false;
+        Dimension::LanguageService* m_Language = nullptr;
         fs::path m_LivePath;     // the file of the request in flight
         double m_LiveMs = -1.0;  // how long the last check took
         std::string m_LiveError;

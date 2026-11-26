@@ -22033,6 +22033,44 @@ namespace
             CHECK(tb.GetText() == "public class Mover\n{\n    void F() { int x = 1; }\n}\n");
             if (tb.GetText() != "public class Mover\n{\n    void F() { int x = 1; }\n}\n") std::printf("  formatted:\n%s\n", tb.GetText().c_str());
         }
+
+        // Building in the editor: an .asmdef library GameScripts uses, and an editor-only assembly using GameScripts.
+        fs::create_directories(project / "Scripts" / "Lib", ec);
+        fs::create_directories(project / "Scripts" / "Tools", ec);
+        std::ofstream(project / "Scripts" / "Lib" / "Lib.asmdef") << R"({ "name": "Lib" })";
+        std::ofstream(project / "Scripts" / "Lib" / "Speeds.cs") << "public static class Speeds { public static float Walk = 2.0f; }\n";
+        std::ofstream(project / "Scripts" / "Tools" / "Tools.asmdef") << R"({ "name": "Tools", "references": ["GameScripts"], "editorOnly": true })";
+        std::ofstream(project / "Scripts" / "Tools" / "MoverTool.cs") << "public static class MoverTool { public static System.Type Of = typeof(Mover); }\n";
+        std::ofstream(a, std::ios::binary) << "using Dimension;\npublic class Mover : Behaviour\n{\n    float m_Speed = Speeds.Walk;\n    public override void OnUpdate(float dt) { Helper.Step(dt * m_Speed); }\n}\n";
+        fs::path out = project / ".dimension" / "ScriptAssemblies";
+        auto build = [&] {
+            service.Send({ Q::Build, project, {}, 0, 0, 13 });
+            for (int i = 0; i < 600; ++i)
+            {
+                if (auto r = service.Poll(Q::Build)) return *r;
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            return LanguageService::Result{ 0, "", {}, {}, 0.0, "timed out" };
+        };
+        r = build();
+        if (!r.Error.empty()) std::printf("  %s\n", r.Error.c_str());
+        for (auto& d : r.Diagnostics)
+            if (d.Level == Dimension::Code::Severity::Error) std::printf("  %s(%d): %s %s\n", d.File.c_str(), d.Line + 1, d.Code.c_str(), d.Message.c_str());
+        CHECK(r.Error.empty() && r.Succeeded && r.Built.size() == 3);
+        if (r.Built.size() == 3) CHECK(r.Built[0] == "Lib" && r.Built[1] == "GameScripts" && r.Built[2] == "Tools"); // (each after what it uses)
+        CHECK(fs::exists(out / "GameScripts.dll") && fs::exists(out / "GameScripts.pdb") && fs::exists(out / "Lib.dll") && fs::exists(out / "Tools.dll"));
+        std::vector<std::string> refs;
+        CHECK(ManagedBuild::ReadAssemblyReferences(out / "GameScripts.dll", refs) && std::find(refs.begin(), refs.end(), "Lib") != refs.end() &&
+              std::find(refs.begin(), refs.end(), "Dimension.Core") != refs.end());
+        // A mistake: the build fails with it where it is, and what uses the broken assembly is not built.
+        std::ofstream(project / "Scripts" / "Lib" / "Speeds.cs") << "public static class Speeds { public static float Walk = 2.0f }\n";
+        auto time = fs::last_write_time(out / "GameScripts.dll", ec);
+        r = build();
+        CHECK(!r.Succeeded && r.Built.empty());
+        bool found = false;
+        for (auto& d : r.Diagnostics) found |= d.Code == "CS1002" && d.Line == 0 && fs::path(d.File).filename() == "Speeds.cs";
+        CHECK(found);
+        CHECK(fs::last_write_time(out / "GameScripts.dll", ec) == time); // (the last good one kept)
         fs::remove_all(project, ec);
     }
 

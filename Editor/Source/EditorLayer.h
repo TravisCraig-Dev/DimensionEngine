@@ -403,6 +403,12 @@ namespace Editor
         std::shared_ptr<std::atomic<int>> m_CSharpBuild; // 0 idle, 1 building, 2 ok, 3 failed
         // What the build reported (filled by the build's thread; read once m_CSharpBuild is no longer 1).
         std::shared_ptr<std::vector<Dimension::Code::Diagnostic>> m_CSharpDiagnostics;
+        // Roslyn in the editor's .NET: Code Mode's live checking and completion, and the scripts' builds (in place of
+        // `dotnet build`, unless the project has NuGet packages to restore).
+        Scope<Dimension::LanguageService> m_Language;
+        bool m_RoslynBuild = false; // the build in progress is the language service's
+        uint64_t m_CSharpBuildCount = 0;
+        uint64_t m_RoslynBuildTag = 0;
         bool m_PlayWhenScriptsReady = false;             // Play pressed while they compiled: starts when they are loaded
         fs::file_time_type m_CSharpBuiltSources{};
         float m_CSharpCheckTimer = 0.0f;

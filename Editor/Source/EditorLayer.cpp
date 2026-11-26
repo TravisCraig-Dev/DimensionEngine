@@ -164,6 +164,7 @@ namespace Editor
         m_Code = MakeScope<CodeMode>(m_Ctx);
         m_Code->BuildScripts = [this] { BuildCSharp(); };
         m_Code->BuildState = [this] { return m_CSharpBuild ? m_CSharpBuild->load() : 0; };
+        m_Code->Language = [this] { return m_Language.get(); };
         m_Ctx.DrawModelModifiers = [this](Entity e) { m_MeshEdit->DrawModifierPanel(e); };
         m_Ctx.OnFileRestored = [this](const fs::path& file) { m_MeshEdit->OnFileRestored(file); };
         m_Packages = MakeScope<PackagesPanel>(m_Ctx);
@@ -5945,6 +5946,8 @@ namespace Editor
         if (m_Options.WaitForDebugger) CSharpRuntime::WaitForDebugger(60.0f);
         fs::path project = Project::GetDirectory();
         CSharpProject::Scaffold(project, ExecutableDirectory() / "managed");
+        auto language = MakeScope<Dimension::LanguageService>();
+        if (language->Start(ExecutableDirectory() / "managed", project)) m_Language = std::move(language);
         fs::path dll = CSharpProject::AssemblyPath(project);
         m_CSharpBuiltSources = CSharpProject::LatestSourceTime(project);
         std::error_code ec;
@@ -6385,6 +6388,15 @@ namespace Editor
         }
         m_CSharpBuild = std::make_shared<std::atomic<int>>(1);
         m_CSharpDiagnostics = std::make_shared<std::vector<Dimension::Code::Diagnostic>>();
+        // Compiled here by Roslyn (no .NET SDK needed, and quicker), unless NuGet packages need the SDK's restore.
+        m_RoslynBuild = m_Language && m_Language->IsRunning() && CSharpProject::ListPackages(project).empty();
+        if (m_RoslynBuild)
+        {
+            Log::Info("Compiling C# scripts...");
+            m_RoslynBuildTag = ++m_CSharpBuildCount;
+            m_Language->Send({ Dimension::LanguageService::Query::Build, project, {}, 0, 0, m_RoslynBuildTag });
+            return;
+        }
         std::string command = CSharpProject::BuildCommand(project);
         Log::Info("Compiling C# scripts...");
         std::thread([state = m_CSharpBuild, diagnostics = m_CSharpDiagnostics, command] {
@@ -6417,6 +6429,24 @@ namespace Editor
     {
         if (!CSharpRuntime::IsAvailable()) return;
         fs::path project = Project::GetDirectory();
+        // The language service's build: its problems logged as MSBuild's would be.
+        if (m_CSharpBuild && m_RoslynBuild && m_Language)
+            if (auto r = m_Language->Poll(Dimension::LanguageService::Query::Build); r && r->Tag == m_RoslynBuildTag)
+            {
+                m_RoslynBuild = false;
+                if (!r->Error.empty()) Log::Error("C# build: {}", r->Error);
+                for (auto& d : r->Diagnostics)
+                {
+                    std::string place = d.Line >= 0 ? d.File + "(" + std::to_string(d.Line + 1) + "," + std::to_string(d.Col + 1) + ")" : d.File;
+                    std::string text = place + ": " + (d.Level == Dimension::Code::Severity::Error ? "error " : "warning ") + d.Code + ": " + d.Message;
+                    if (d.Level == Dimension::Code::Severity::Error) Log::Error("{}", text);
+                    else Log::Warn("{}", text);
+                    if (d.Line < 0) d.Line = -1, d.EndLine = -1;
+                    m_CSharpDiagnostics->push_back(d);
+                }
+                if (r->Succeeded) Log::Info("Compiled C# scripts in {:.0f} ms (in the editor)", r->Milliseconds);
+                m_CSharpBuild->store(r->Error.empty() && r->Succeeded ? 2 : 3);
+            }
         if (m_CSharpBuild)
         {
             int state = m_CSharpBuild->load();
