@@ -11,8 +11,10 @@
 namespace Dimension
 {
     // Code Mode's language service: Roslyn in the hosted .NET (bin/managed/codeservice/Dimension.CodeService.dll)
-    // checking the project's scripts as they are edited, on a thread of its own. Ask with Request (a newer request
-    // replaces one still waiting); results come back through Poll.
+    // checking the project's scripts as they are edited, and answering what can be typed at a place (completion), the
+    // call a place is in (signature help) and what a name is (hover), on a thread of its own. Ask with Send (a newer
+    // question of a kind replaces one of that kind still waiting; the quick ones go first); answers come back through
+    // Poll.
     class LanguageService
     {
     public:
@@ -30,9 +32,43 @@ namespace Dimension
             fs::path Path;
             std::string Text; // the text being edited (in place of the file on disk)
         };
-        // Check the assembly `file` is in. `tag` comes back with the result (to tell which edit it was for).
-        void Request(const fs::path& file, std::vector<Overlay> overlays, uint64_t tag = 0);
-        bool Busy() const;
+        enum class Query : uint8_t
+        {
+            Completion, Signature, Hover, // (in the order they are answered)
+            Diagnostics,
+            Count
+        };
+        struct Question
+        {
+            Query Kind = Query::Diagnostics;
+            fs::path File;
+            std::vector<Overlay> Overlays;
+            int Line = 0, Col = 0; // the place asked about (0-based; UTF-16 column)
+            uint64_t Tag = 0;      // comes back with the result (to tell which edit or place it was for)
+        };
+        void Send(Question question);
+        // Check the assembly `file` is in.
+        void Request(const fs::path& file, std::vector<Overlay> overlays, uint64_t tag = 0)
+        {
+            Send({ Query::Diagnostics, file, std::move(overlays), 0, 0, tag });
+        }
+        bool Busy(Query kind = Query::Diagnostics) const;
+
+        struct CompletionItem
+        {
+            std::string Label, Kind, Detail, Doc;
+            std::string Insert; // what goes in instead of the label ("$0": where the cursor goes; may span lines)
+        };
+        struct SignatureParam
+        {
+            int Start = 0, Length = 0; // in the label (bytes)
+            std::string Name, Doc;
+        };
+        struct Signature
+        {
+            std::string Label, Doc;
+            std::vector<SignatureParam> Params;
+        };
 
         struct Result
         {
@@ -42,9 +78,17 @@ namespace Dimension
             std::vector<Code::Diagnostic> Diagnostics;   // (0-based lines, UTF-16 columns, with their ends)
             double Milliseconds = 0.0;
             std::string Error;                           // when the check itself failed
+            Query Kind = Query::Diagnostics;
+            // Completion
+            std::vector<CompletionItem> Items;
+            // Signature help
+            std::vector<Signature> Signatures;
+            int ActiveSignature = 0, ActiveParam = 0;
+            // Hover
+            std::string HoverText, HoverDoc;
         };
-        // The newest finished result, once.
-        std::optional<Result> Poll();
+        // The newest finished result of a kind, once.
+        std::optional<Result> Poll(Query kind = Query::Diagnostics);
 
         // The service's JSON answer as a Result (exposed for tests).
         static Result ParseResult(const std::string& json);
@@ -52,12 +96,6 @@ namespace Dimension
     private:
         void Worker();
 
-        struct Pending
-        {
-            fs::path File;
-            std::vector<Overlay> Overlays;
-            uint64_t Tag = 0;
-        };
         using AnalyzeFn = char* (*)(const char*);
         using FreeFn = void (*)(char*);
         AnalyzeFn m_Analyze = nullptr;
@@ -66,8 +104,9 @@ namespace Dimension
         std::thread m_Thread;
         mutable std::mutex m_Mutex;
         std::condition_variable m_Wake;
-        std::optional<Pending> m_Pending;
-        std::optional<Result> m_Done;
-        bool m_Working = false, m_Quit = false, m_Running = false;
+        std::optional<Question> m_Pending[(int)Query::Count];
+        std::optional<Result> m_Done[(int)Query::Count];
+        int m_Working = -1; // the kind being answered
+        bool m_Quit = false, m_Running = false;
     };
 }

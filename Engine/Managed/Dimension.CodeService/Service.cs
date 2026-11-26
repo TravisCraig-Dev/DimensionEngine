@@ -45,10 +45,15 @@ namespace Dimension.CodeService
             }
         }
 
-        // {"file", "overlays": [{"path", "text"}]}: the diagnostics of the assembly `file` is in, with the texts of
-        // files being edited (unsaved) in place of what is on disk.
-        //   -> {"assembly", "files": [...every source of it...], "diagnostics": [{file, line, col, endLine, endCol,
-        //       severity, code, message}], "ms"}  or {"error"}
+        // {"kind", "file", "overlays": [{"path", "text"}], "line", "col"}: a question about `file` (and the assembly it is
+        // in), with the texts of files being edited (unsaved) in place of what is on disk. Lines are 0-based, columns
+        // UTF-16. The kinds (see Queries.cs for the last three):
+        //   "diagnostics" -> {"assembly", "files": [...every source of it...], "diagnostics": [{file, line, col, endLine,
+        //                     endCol, severity, code, message}], "ms"}
+        //   "completion"  -> {"items": [{label, kind, detail, insert?}], "ms"}
+        //   "signature"   -> {"signatures": [{label, doc, params: [{start, length, name, doc}]}], "active", "param", "ms"}
+        //   "hover"       -> {"text", "doc", "ms"}
+        // or {"error"}.
         [UnmanagedCallersOnly]
         public static byte* Analyze(byte* requestUtf8)
         {
@@ -86,8 +91,34 @@ namespace Dimension.CodeService
                 foreach (var o in list.EnumerateArray()) overlays[Path.GetFullPath(o.GetProperty("path").GetString())] = o.GetProperty("text").GetString();
 
             var watch = Stopwatch.StartNew();
+            string kind = root.TryGetProperty("kind", out var k) ? k.GetString() : "diagnostics";
             var unit = s_Project.UnitOf(Path.GetFullPath(file));
             var compilation = unit.Compile(overlays);
+            if (kind != "diagnostics")
+            {
+                int line = root.TryGetProperty("line", out var l) ? l.GetInt32() : 0;
+                int col = root.TryGetProperty("col", out var c) ? c.GetInt32() : 0;
+                var tree = unit.TreeOf(Path.GetFullPath(file));
+                if (tree == null) return "{\"ms\":0}";
+                var text = tree.GetText();
+                line = Math.Clamp(line, 0, text.Lines.Count - 1);
+                int position = Math.Min(text.Lines[line].Start + Math.Max(0, col), text.Lines[line].End);
+                var model = compilation.GetSemanticModel(tree);
+                using var output = new MemoryStream();
+                using (var w = new Utf8JsonWriter(output))
+                {
+                    w.WriteStartObject();
+                    switch (kind)
+                    {
+                        case "completion": Queries.Completion(model, position, w); break;
+                        case "signature": Queries.Signature(model, position, w); break;
+                        case "hover": Queries.Hover(model, position, w); break;
+                    }
+                    w.WriteNumber("ms", watch.Elapsed.TotalMilliseconds);
+                    w.WriteEndObject();
+                }
+                return Encoding.UTF8.GetString(output.ToArray());
+            }
             ImmutableArray<Diagnostic> diagnostics;
             var analyzers = s_Project.Analyzers();
             if (analyzers.Length > 0)
@@ -213,7 +244,8 @@ namespace Dimension.CodeService
                 DateTime time = File.GetLastWriteTimeUtc(p);
                 if (!m_References.TryGetValue(p, out var cached) || cached.Time != time)
                 {
-                    cached = (time, IsManaged(p) ? MetadataReference.CreateFromFile(p) : null);
+                    string xml = Path.ChangeExtension(p, ".xml");
+                    cached = (time, IsManaged(p) ? MetadataReference.CreateFromFile(p, documentation: File.Exists(xml) ? new XmlDocs(xml) : null) : null);
                     m_References[p] = cached;
                 }
                 if (cached.Ref != null) refs.Add(cached.Ref);
@@ -275,6 +307,9 @@ namespace Dimension.CodeService
         private CSharpCompilationOptions m_Options;
         private SyntaxTree m_GlobalUsings;
         private DateTime m_ProjectTime;
+        private CSharpCompilation m_Compilation;
+        private List<MetadataReference> m_CompiledReferences;
+        private List<SyntaxTree> m_CompiledTrees;
 
         public Unit(ProjectModel project, string name, string directory)
         {
@@ -284,6 +319,7 @@ namespace Dimension.CodeService
         }
 
         public bool Contains(string path) => path != null && m_FileSet.Contains(path);
+        public SyntaxTree TreeOf(string path) => m_Trees.TryGetValue(path, out var t) ? t.Tree : null;
 
         public CSharpCompilation Compile(Dictionary<string, string> overlays)
         {
@@ -307,7 +343,20 @@ namespace Dimension.CodeService
             }
             foreach (string gone in m_Trees.Keys.Where(k => !m_FileSet.Contains(k)).ToList()) m_Trees.Remove(gone);
             if (m_GlobalUsings != null) trees.Add(m_GlobalUsings);
-            return CSharpCompilation.Create(Name, trees, m_Project.References(Name), m_Options);
+            var references = m_Project.References(Name);
+            bool sameReferences = m_CompiledReferences != null && m_CompiledReferences.Count == references.Count &&
+                                  m_CompiledReferences.Zip(references).All(r => ReferenceEquals(r.First, r.Second));
+            if (m_Compilation != null && sameReferences && m_CompiledTrees.Count == trees.Count &&
+                m_CompiledTrees.Zip(trees).All(t => t.First.FilePath == t.Second.FilePath))
+            {
+                // (Roslyn keeps what it knows about the files that did not change)
+                for (int i = 0; i < trees.Count; ++i)
+                    if (!ReferenceEquals(m_CompiledTrees[i], trees[i])) m_Compilation = m_Compilation.ReplaceSyntaxTree(m_CompiledTrees[i], trees[i]);
+            }
+            else m_Compilation = CSharpCompilation.Create(Name, trees, references, m_Options);
+            m_CompiledTrees = trees;
+            m_CompiledReferences = references;
+            return m_Compilation;
         }
 
         private static string ReadFile(string path)
@@ -384,6 +433,41 @@ namespace Dimension.CodeService
                                              "global using global::System.Threading.Tasks;\n", m_Parse, "GlobalUsings.g.cs")
                 : null;
             m_Trees.Clear(); // (parsed with the old options)
+            m_Compilation = null;
         }
+    }
+
+    // A reference's XML documentation file (Dimension.Core.xml...), read once: member id -> its <member> element.
+    internal sealed class XmlDocs : DocumentationProvider
+    {
+        private readonly string m_Path;
+        private Dictionary<string, string> m_Members;
+        private readonly object m_Lock = new();
+
+        public XmlDocs(string path) => m_Path = path;
+
+        protected override string GetDocumentationForSymbol(string documentationMemberID, System.Globalization.CultureInfo preferredCulture,
+                                                            CancellationToken cancellationToken = default)
+        {
+            lock (m_Lock)
+            if (m_Members == null)
+            {
+                var members = new Dictionary<string, string>();
+                try
+                {
+                    var doc = System.Xml.Linq.XDocument.Load(m_Path);
+                    foreach (var m in doc.Descendants("member"))
+                        if (m.Attribute("name")?.Value is { } name) members[name] = m.ToString();
+                }
+                catch (Exception)
+                {
+                }
+                m_Members = members;
+            }
+            return m_Members.TryGetValue(documentationMemberID, out var xml) ? xml : "";
+        }
+
+        public override bool Equals(object obj) => obj is XmlDocs other && other.m_Path == m_Path;
+        public override int GetHashCode() => m_Path.GetHashCode();
     }
 }

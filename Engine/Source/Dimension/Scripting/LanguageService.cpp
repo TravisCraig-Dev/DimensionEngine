@@ -57,27 +57,28 @@ namespace Dimension
         return true;
     }
 
-    void LanguageService::Request(const fs::path& file, std::vector<Overlay> overlays, uint64_t tag)
+    void LanguageService::Send(Question request)
     {
         if (!m_Running) return;
         {
             std::lock_guard lock(m_Mutex);
-            m_Pending = Pending{ file, std::move(overlays), tag };
+            int kind = (int)request.Kind;
+            m_Pending[kind] = std::move(request);
         }
         m_Wake.notify_one();
     }
 
-    bool LanguageService::Busy() const
+    bool LanguageService::Busy(Query kind) const
     {
         std::lock_guard lock(m_Mutex);
-        return m_Working || m_Pending.has_value();
+        return m_Working == (int)kind || m_Pending[(int)kind].has_value();
     }
 
-    std::optional<LanguageService::Result> LanguageService::Poll()
+    std::optional<LanguageService::Result> LanguageService::Poll(Query kind)
     {
         std::lock_guard lock(m_Mutex);
-        std::optional<Result> out = std::move(m_Done);
-        m_Done.reset();
+        std::optional<Result> out = std::move(m_Done[(int)kind]);
+        m_Done[(int)kind].reset();
         return out;
     }
 
@@ -85,16 +86,30 @@ namespace Dimension
     {
         for (;;)
         {
-            Pending job;
+            Question job;
             {
                 std::unique_lock lock(m_Mutex);
-                m_Wake.wait(lock, [&] { return m_Quit || m_Pending.has_value(); });
+                auto any = [&] {
+                    for (const auto& p : m_Pending)
+                        if (p) return true;
+                    return false;
+                };
+                m_Wake.wait(lock, [&] { return m_Quit || any(); });
                 if (m_Quit) return;
-                job = std::move(*m_Pending);
-                m_Pending.reset();
-                m_Working = true;
+                for (auto& p : m_Pending) // (the first kind waiting: completion before the rest)
+                    if (p)
+                    {
+                        job = std::move(*p);
+                        p.reset();
+                        break;
+                    }
+                m_Working = (int)job.Kind;
             }
+            static const char* kKinds[] = { "completion", "signature", "hover", "diagnostics" };
             nlohmann::json request;
+            request["kind"] = kKinds[(int)job.Kind];
+            request["line"] = job.Line;
+            request["col"] = job.Col;
             request["file"] = Utf8Path(job.File);
             request["overlays"] = nlohmann::json::array();
             for (const Overlay& o : job.Overlays) request["overlays"].push_back({ { "path", Utf8Path(o.Path) }, { "text", o.Text } });
@@ -106,10 +121,11 @@ namespace Dimension
             }
             Result result = ParseResult(answer);
             result.Tag = job.Tag;
+            result.Kind = job.Kind;
             {
                 std::lock_guard lock(m_Mutex);
-                m_Done = std::move(result);
-                m_Working = false;
+                m_Done[(int)job.Kind] = std::move(result);
+                m_Working = -1;
             }
         }
     }
@@ -147,6 +163,31 @@ namespace Dimension
                 diag.Message = d.value("message", std::string());
                 r.Diagnostics.push_back(std::move(diag));
             }
+        if (j.contains("items") && j["items"].is_array())
+            for (const auto& i : j["items"])
+                r.Items.push_back({ i.value("label", std::string()), i.value("kind", std::string()), i.value("detail", std::string()),
+                                    i.value("doc", std::string()), i.value("insert", std::string()) });
+        if (j.contains("signatures") && j["signatures"].is_array())
+        {
+            for (const auto& s : j["signatures"])
+            {
+                Signature sig{ s.value("label", std::string()), s.value("doc", std::string()), {} };
+                // (the service counts UTF-16 units in the label: as bytes here)
+                std::string label = sig.Label;
+                if (s.contains("params") && s["params"].is_array())
+                    for (const auto& p : s["params"])
+                    {
+                        int start = Code::Utf16ToByte(label, p.value("start", 0));
+                        int end = Code::Utf16ToByte(label, p.value("start", 0) + p.value("length", 0));
+                        sig.Params.push_back({ start, end - start, p.value("name", std::string()), p.value("doc", std::string()) });
+                    }
+                r.Signatures.push_back(std::move(sig));
+            }
+            r.ActiveSignature = j.value("active", 0);
+            r.ActiveParam = j.value("param", 0);
+        }
+        r.HoverText = j.value("text", std::string());
+        r.HoverDoc = j.value("doc", std::string());
         return r;
     }
 }

@@ -21921,6 +21921,59 @@ namespace
         // The other file changed (unsaved) to have it: clean again.
         r = check({ { a, edited }, { b, "public static class Helper\n{\n    public static void Jump(float dt) { }\n}\n" } });
         CHECK(errors(r) == 0);
+
+        // Completion, parameter hints and hover: questions about a place.
+        using Q = LanguageService::Query;
+        auto ask = [&](Q kind, const std::string& text, int line, int col) {
+            service.Send({ kind, a, { { a, text } }, line, col, 9 });
+            for (int i = 0; i < 300; ++i)
+            {
+                if (auto r = service.Poll(kind)) return *r;
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            return LanguageService::Result{};
+        };
+        auto has = [](const LanguageService::Result& r, const std::string& label, const std::string& kind) {
+            for (auto& i : r.Items)
+                if (i.Label == label && (kind.empty() || i.Kind == kind)) return &i;
+            return (const LanguageService::CompletionItem*)nullptr;
+        };
+        // After "Transform.": its members (with the API's documentation), not the scope's.
+        std::string code = "using Dimension;\npublic class Mover : Behaviour\n{\n    int m_Count;\n    public override void OnUpdate(float dt)\n    {\n        Transform.\n    }\n}\n";
+        r = ask(Q::Completion, code, 6, 18);
+        CHECK(r.Tag == 9 && r.Error.empty() && has(r, "LookAt", "method") && !has(r, "m_Count", ""));
+        if (auto* look = has(r, "LookAt", "method")) CHECK(look->Detail.find("LookAt(") != std::string::npos && !look->Doc.empty());
+        // In a method: locals, members, types, keywords.
+        code = "using Dimension;\npublic class Mover : Behaviour\n{\n    int m_Count;\n    public override void OnUpdate(float dt)\n    {\n        float speed = 1;\n        m\n    }\n}\n";
+        r = ask(Q::Completion, code, 7, 9);
+        CHECK(has(r, "m_Count", "field") && has(r, "speed", "local") && has(r, "dt", "parameter") && has(r, "Helper", "class") && has(r, "return", "keyword"));
+        // Naming a new variable, in a comment: nothing.
+        code = "public class Mover\n{\n    void F()\n    {\n        int spe\n        // Transform.\n    }\n}\n";
+        CHECK(ask(Q::Completion, code, 4, 15).Items.empty());
+        CHECK(ask(Q::Completion, code, 5, 21).Items.empty());
+        // After "override ": what is left to override, as whole declarations.
+        code = "using Dimension;\npublic class Mover : Behaviour\n{\n    public override void OnUpdate(float dt) { }\n    public override \n}\n";
+        r = ask(Q::Completion, code, 4, 20);
+        auto* create = has(r, "OnCreate()", "method");
+        CHECK(create && create->Insert.find("void OnCreate()") == 0 && create->Insert.find("$0") != std::string::npos);
+        CHECK(!has(r, "OnUpdate(float)", "method")); // (already overridden)
+        // Parameter hints: the call's overloads, the parameter being typed.
+        code = "public class Mover\n{\n    void F(int a, string b) { }\n    void F(int a) { }\n    void G() { F(1, \"x\"); }\n}\n";
+        r = ask(Q::Signature, code, 4, 20); // (after the comma)
+        CHECK(r.Signatures.size() == 2 && r.ActiveParam == 1);
+        if (r.Signatures.size() == 2)
+        {
+            const auto& sig = r.Signatures[(size_t)r.ActiveSignature];
+            CHECK(sig.Params.size() == 2 && sig.Label.substr((size_t)sig.Params[1].Start, (size_t)sig.Params[1].Length) == "string b");
+        }
+        CHECK(ask(Q::Signature, code, 2, 4).Signatures.empty()); // (not in a call)
+        // Hover: what a name is.
+        code = "using Dimension;\npublic class Mover : Behaviour\n{\n    public override void OnUpdate(float dt)\n    {\n        float speed = dt;\n        Transform.LookAt(default);\n    }\n}\n";
+        r = ask(Q::Hover, code, 5, 23); // dt
+        CHECK(r.HoverText == "(parameter) float dt");
+        r = ask(Q::Hover, code, 6, 20); // LookAt
+        CHECK(r.HoverText.find("Transform.LookAt(") != std::string::npos && !r.HoverDoc.empty());
+        CHECK(ask(Q::Hover, code, 4, 4).HoverText.empty()); // ({)
         fs::remove_all(project, ec);
     }
 

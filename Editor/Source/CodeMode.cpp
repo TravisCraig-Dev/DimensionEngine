@@ -965,6 +965,11 @@ namespace Editor
         bool moved = false, edited = false;
         uint64_t version = b.Version();
         TextPos before = b.Cursor(), anchorBefore = b.Anchor();
+        if (AssistKeys(doc))
+        {
+            io.InputQueueCharacters.resize(0);
+            return;
+        }
 
         if (ctrl && !alt)
         {
@@ -1011,6 +1016,11 @@ namespace Editor
                 if (b.IsDirty()) m_ConfirmClose = m_Current;
                 else CloseTab(m_Current);
                 return;
+            }
+            else if (pressed(ImGuiKey_Space))
+            {
+                if (shift) RequestSignature(doc);
+                else RequestCompletion(doc, true);
             }
             else if (pressed(ImGuiKey_Equal) || pressed(ImGuiKey_KeypadAdd)) m_Zoom = std::min(m_Zoom + 0.1f, 3.0f);
             else if (pressed(ImGuiKey_Minus) || pressed(ImGuiKey_KeypadSubtract)) m_Zoom = std::max(m_Zoom - 0.1f, 0.5f);
@@ -1074,8 +1084,14 @@ namespace Editor
             }
             if (!typed.empty())
             {
+                // A character that ends a name ("(", ".", ";") takes the list's choice first, when the word starts it.
+                if (typed.size() == 1 && (typed[0] == '(' || typed[0] == '.' || typed[0] == ';') && m_Completion.Open && !m_Completion.Shown.empty() &&
+                    m_Completion.Scores[(size_t)m_Completion.Selected] <= 1 && m_Completion.Items[(size_t)m_Completion.Shown[(size_t)m_Completion.Selected]].Insert.empty() &&
+                    b.Cursor().Col > m_Completion.StartCol)
+                    AcceptCompletion(doc);
                 if (typed.size() == 1) TypeText(doc, typed);
                 else b.Type(typed);
+                TypedAssist(doc, typed);
             }
         }
         io.InputQueueCharacters.resize(0);
@@ -1153,6 +1169,7 @@ namespace Editor
         if (overText && mouse.x > gutterRight) ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput);
         if (overText && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
+            m_Completion.Open = m_Completion.Waiting = false;
             TextPos at = posAt(mouse);
             int clicks = ImGui::GetIO().MouseClickedCount[0];
             if (mouse.x <= gutterRight)
@@ -1296,14 +1313,61 @@ namespace Editor
                 if (canHover && l == hoverLine && hoverVisual >= va && hoverVisual < vb && (!hovered || p.D.Level < hovered->D.Level)) hovered = &p;
             }
         }
-        if (hovered)
+        {
+            int wordLine = -1, wordCol = -1;
+            if (canHover && m_Language && hoverLine >= 0 && hoverLine < lines && hoverVisual >= 0)
+            {
+                const std::string& s = b.Line(hoverLine);
+                int col = b.ColumnAtVisual(hoverLine, hoverVisual);
+                if (col < (int)s.size() && b.VisualColumn(hoverLine, col) <= hoverVisual && IsWordByte(s[(size_t)col]))
+                {
+                    while (col > 0 && IsWordByte(s[(size_t)col - 1])) --col;
+                    wordLine = hoverLine;
+                    wordCol = col;
+                }
+            }
+            double now = ImGui::GetTime();
+            if (m_Hover.Doc != &doc || m_Hover.Line != wordLine || m_Hover.Col != wordCol)
+            {
+                m_Hover = HoverState{};
+                m_Hover.Doc = &doc;
+                m_Hover.Line = wordLine;
+                m_Hover.Col = wordCol;
+                m_Hover.Since = now;
+            }
+            if (wordLine >= 0 && !m_Hover.Asked && now - m_Hover.Since > 0.4 && !m_Completion.Open)
+            {
+                m_Hover.Asked = true;
+                m_Hover.Tag = m_NextTag++;
+                LanguageService::Question q{ LanguageService::Query::Hover, doc.Path, OverlaysFor(doc), wordLine,
+                                             Code::ByteToUtf16(b.Line(wordLine), wordCol), m_Hover.Tag };
+                m_Language->Send(std::move(q));
+            }
+        }
+        bool hoverInfo = m_Hover.Have && !m_Hover.Text.empty() && m_Hover.Line >= 0 && !m_Completion.Open;
+        if (hovered || hoverInfo)
         {
             ImGui::PopFont(); // (the tooltip in the interface's font)
             ImGui::BeginTooltip();
-            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(SeverityColor(hovered->D.Level)), "%s %s", hovered->D.Level == Severity::Error ? "error" : "warning",
-                               hovered->D.Code.c_str());
             ImGui::PushTextWrapPos(ImGui::GetFontSize() * 40.0f);
-            ImGui::TextUnformatted(hovered->D.Message.c_str());
+            if (hovered)
+            {
+                ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(SeverityColor(hovered->D.Level)), "%s %s", hovered->D.Level == Severity::Error ? "error" : "warning",
+                                   hovered->D.Code.c_str());
+                ImGui::TextUnformatted(hovered->D.Message.c_str());
+            }
+            if (hovered && hoverInfo) ImGui::Separator();
+            if (hoverInfo)
+            {
+                ImGui::PushFont(font, std::round(fontSize * 0.93f));
+                ImGui::TextUnformatted(m_Hover.Text.c_str());
+                ImGui::PopFont();
+                if (!m_Hover.Info.empty())
+                {
+                    ImGui::Spacing();
+                    ImGui::TextUnformatted(m_Hover.Info.c_str());
+                }
+            }
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
             ImGui::PushFont(font, fontSize);
@@ -1350,6 +1414,7 @@ namespace Editor
         ImGui::EndChild();
         ImGui::PopStyleColor();
         ImGui::PopFont();
+        DrawAssist(doc, text, charW, lineH, font, fontSize);
     }
 
     // ---- Problems (the last build's errors and warnings)
@@ -1412,6 +1477,7 @@ namespace Editor
         }
         if (!m_Language) return;
         if (auto result = m_Language->Poll()) ApplyLive(*result);
+        PollAssist();
 
         // The file in front, once typing in it has paused (the other open files' unsaved texts go along).
         Document* doc = Current();
@@ -1638,5 +1704,471 @@ namespace Editor
             ImGui::TextDisabled(!m_HaveBuildResult ? "Build the scripts (Ctrl+B) to see their problems here." : m_Problems.empty() ? "No problems: the last build was clean." : "Nothing shown (see the filters above).");
         }
         ImGui::EndChild();
+    }
+
+    // ---- Completion, parameter hints, hover
+
+    std::vector<LanguageService::Overlay> CodeMode::OverlaysFor(Document& doc)
+    {
+        std::vector<LanguageService::Overlay> overlays;
+        for (auto& d : m_Docs)
+            if (d.get() == &doc || d->Buffer.IsDirty()) overlays.push_back({ d->Path, d->Buffer.GetText() });
+        return overlays;
+    }
+
+    void CodeMode::RequestCompletion(Document& doc, bool explicitly)
+    {
+        if (!m_Language) return;
+        TextBuffer& b = doc.Buffer;
+        TextPos c = b.Cursor();
+        const std::string& line = b.Line(c.Line);
+        int start = c.Col;
+        while (start > 0 && IsWordByte(line[(size_t)start - 1])) --start;
+        m_Completion = CompletionState{};
+        m_Completion.Doc = &doc;
+        m_Completion.Line = c.Line;
+        m_Completion.StartCol = start;
+        m_Completion.Waiting = true;
+        m_Completion.Explicit = explicitly;
+        m_Completion.Tag = m_NextTag++;
+        m_Language->Send({ LanguageService::Query::Completion, doc.Path, OverlaysFor(doc), c.Line, Code::ByteToUtf16(line, c.Col), m_Completion.Tag });
+    }
+
+    void CodeMode::RequestSignature(Document& doc)
+    {
+        if (!m_Language) return;
+        TextBuffer& b = doc.Buffer;
+        TextPos c = b.Cursor();
+        if (m_Signature.Doc != &doc) m_Signature = SignatureState{};
+        m_Signature.Doc = &doc;
+        m_Signature.Tag = m_NextTag++;
+        m_Signature.AskedVersion = b.Version();
+        m_Signature.AskedCursor = c;
+        m_Language->Send({ LanguageService::Query::Signature, doc.Path, OverlaysFor(doc), c.Line, Code::ByteToUtf16(b.Line(c.Line), c.Col), m_Signature.Tag });
+    }
+
+    void CodeMode::TypedAssist(Document& doc, const std::string& typed)
+    {
+        if (!m_Language || typed.empty()) return;
+        TextBuffer& b = doc.Buffer;
+        TextPos c = b.Cursor();
+        const std::string& line = b.Line(c.Line);
+        char ch = typed.back(); // (several at once when typing fast or pasting a word: the last one counts)
+        if (c.Col == 0 || line[(size_t)c.Col - 1] != ch) return; // (typed over or wrapped a selection)
+        auto wordBefore = [&](int end) {
+            int start = end;
+            while (start > 0 && IsWordByte(line[(size_t)start - 1])) --start;
+            return line.substr((size_t)start, (size_t)(end - start));
+        };
+        if (ch == '.')
+        {
+            // (not in a number: "1.5")
+            std::string left = wordBefore(c.Col - 1);
+            if (left.empty() || !std::isdigit((unsigned char)left[0])) RequestCompletion(doc, true);
+            else m_Completion.Open = m_Completion.Waiting = false;
+        }
+        else if (IsWordByte(ch))
+        {
+            // The first letter of a word opens the list (it then narrows as the word goes on).
+            std::string word = wordBefore(c.Col);
+            if (!m_Completion.Open && !m_Completion.Waiting && !word.empty() && word.size() <= typed.size() && !std::isdigit((unsigned char)word[0]))
+                RequestCompletion(doc, false);
+        }
+        else if (ch == ' ')
+        {
+            // After "override " (what to override) and "new " (types).
+            std::string word = wordBefore(c.Col - 1);
+            if (word == "override" || word == "new") RequestCompletion(doc, true);
+            else m_Completion.Open = m_Completion.Waiting = false;
+        }
+        else m_Completion.Open = m_Completion.Waiting = false;
+
+        if (ch == '(' || ch == ',') RequestSignature(doc);
+        else if (ch == ')' && m_Signature.Open) RequestSignature(doc);
+    }
+
+    void CodeMode::PollAssist()
+    {
+        using Q = LanguageService::Query;
+        Document* doc = Current();
+        if (auto r = m_Language->Poll(Q::Completion))
+            if (r->Tag == m_Completion.Tag && m_Completion.Doc == doc && doc && r->Error.empty())
+            {
+                m_Completion.Items = std::move(r->Items);
+                m_Completion.Waiting = false;
+                m_Completion.Open = true;
+                m_Completion.FilteredVersion = 0;
+                FilterCompletion(*doc);
+            }
+        if (auto r = m_Language->Poll(Q::Signature))
+            if (r->Tag == m_Signature.Tag && m_Signature.Doc == doc && doc)
+            {
+                m_Signature.Signatures = std::move(r->Signatures);
+                m_Signature.Open = !m_Signature.Signatures.empty();
+                m_Signature.Active = std::clamp(r->ActiveSignature, 0, std::max(0, (int)m_Signature.Signatures.size() - 1));
+                m_Signature.Param = r->ActiveParam;
+            }
+        if (auto r = m_Language->Poll(Q::Hover))
+            if (r->Tag == m_Hover.Tag)
+            {
+                m_Hover.Have = true;
+                m_Hover.Text = std::move(r->HoverText);
+                m_Hover.Info = std::move(r->HoverDoc);
+            }
+        // Another file in front: the list and hints were for the one before.
+        if (m_Completion.Doc && m_Completion.Doc != doc) m_Completion = CompletionState{};
+        if (m_Signature.Doc && m_Signature.Doc != doc) m_Signature = SignatureState{};
+        if (!doc) return;
+        if (m_Completion.Open) FilterCompletion(*doc);
+        // The hints follow the cursor (asked again when it moves or the text changes; they close outside a call).
+        if (m_Signature.Open && (doc->Buffer.Version() != m_Signature.AskedVersion || doc->Buffer.Cursor() != m_Signature.AskedCursor) &&
+            !m_Language->Busy(Q::Signature))
+            RequestSignature(*doc);
+    }
+
+    void CodeMode::FilterCompletion(Document& doc)
+    {
+        CompletionState& cs = m_Completion;
+        TextBuffer& b = doc.Buffer;
+        TextPos c = b.Cursor();
+        if (cs.FilteredVersion == b.Version() && cs.FilteredCursor == c) return;
+        cs.FilteredVersion = b.Version();
+        cs.FilteredCursor = c;
+        // Still in the word it began with (else closed).
+        const std::string& line = b.Line(std::min(cs.Line, b.LineCount() - 1));
+        bool inWord = c.Line == cs.Line && c.Col >= cs.StartCol && c.Col <= (int)line.size() && !b.HasSelection();
+        for (int i = cs.StartCol; inWord && i < c.Col; ++i) inWord = IsWordByte(line[(size_t)i]);
+        std::string word = inWord ? line.substr((size_t)cs.StartCol, (size_t)(c.Col - cs.StartCol)) : std::string();
+        if (!inWord || (word.empty() && !cs.Explicit))
+        {
+            cs.Open = cs.Waiting = false;
+            return;
+        }
+        auto lower = [](std::string s) {
+            for (char& ch : s) ch = (char)std::tolower((unsigned char)ch);
+            return s;
+        };
+        std::string lw = lower(word);
+        std::vector<std::pair<int, int>> matches; // (score, item)
+        for (int i = 0; i < (int)cs.Items.size(); ++i)
+        {
+            const std::string& label = cs.Items[(size_t)i].Label;
+            int score = -1;
+            if (word.empty() || label.compare(0, word.size(), word) == 0) score = 0;
+            else
+            {
+                std::string ll = lower(label);
+                if (ll.compare(0, lw.size(), lw) == 0) score = 1;
+                else
+                {
+                    // The capitals ("gc" -> GetComponent), then anywhere inside.
+                    size_t j = 0;
+                    bool humps = true;
+                    for (char w : lw)
+                    {
+                        while (j < label.size() && !(std::tolower((unsigned char)label[j]) == w &&
+                                                     (j == 0 || std::isupper((unsigned char)label[j]) || label[j - 1] == '_')))
+                            ++j;
+                        if (j == label.size())
+                        {
+                            humps = false;
+                            break;
+                        }
+                        ++j;
+                    }
+                    if (humps) score = 2;
+                    else if (lw.size() >= 2 && ll.find(lw) != std::string::npos) score = 3;
+                }
+            }
+            if (score >= 0) matches.push_back({ score, i });
+        }
+        std::stable_sort(matches.begin(), matches.end(), [](auto& a, auto& b) { return a.first < b.first; });
+        cs.Shown.clear();
+        cs.Scores.clear();
+        for (auto& [score, i] : matches)
+        {
+            cs.Shown.push_back(i);
+            cs.Scores.push_back(score);
+        }
+        // (a word that is already the only match, whole: nothing to offer)
+        if (cs.Shown.empty() || (cs.Shown.size() == 1 && cs.Items[(size_t)cs.Shown[0]].Label == word && !cs.Explicit))
+        {
+            cs.Open = false;
+            return;
+        }
+        cs.Selected = 0;
+        cs.ScrollToSelected = true;
+    }
+
+    void CodeMode::AcceptCompletion(Document& doc)
+    {
+        CompletionState& cs = m_Completion;
+        if (!cs.Open || cs.Shown.empty()) return;
+        const auto& item = cs.Items[(size_t)cs.Shown[(size_t)std::clamp(cs.Selected, 0, (int)cs.Shown.size() - 1)]];
+        TextBuffer& b = doc.Buffer;
+        TextPos start{ cs.Line, cs.StartCol }, end = b.Cursor();
+        if (item.Insert.empty())
+        {
+            b.Replace(start, end, item.Label);
+        }
+        else
+        {
+            // A whole declaration (an override): its lines at this line's indentation, the cursor where "$0" is.
+            std::string indent = b.IndentOf(cs.Line), text, unit = "    ";
+            size_t from = 0;
+            bool first = true;
+            while (from <= item.Insert.size())
+            {
+                size_t nl = item.Insert.find('\n', from);
+                std::string part = item.Insert.substr(from, nl == std::string::npos ? std::string::npos : nl - from);
+                if (!first)
+                {
+                    std::string lead;
+                    while (part.compare(0, unit.size(), unit) == 0)
+                    {
+                        lead += b.IndentUnit;
+                        part.erase(0, unit.size());
+                    }
+                    text += "\n" + indent + lead;
+                }
+                text += part;
+                first = false;
+                if (nl == std::string::npos) break;
+                from = nl + 1;
+            }
+            size_t mark = text.find("$0");
+            std::string before = mark == std::string::npos ? text : text.substr(0, mark);
+            if (mark != std::string::npos) text.erase(mark, 2);
+            b.Replace(start, end, text);
+            TextPos caret = start;
+            for (char ch : before)
+            {
+                if (ch == '\n') ++caret.Line, caret.Col = 0;
+                else ++caret.Col;
+            }
+            b.SetCursor(caret);
+        }
+        b.BreakMerge();
+        cs = CompletionState{};
+        doc.ScrollToCursor = true;
+    }
+
+    bool CodeMode::AssistKeys(Document& doc)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.KeyCtrl || io.KeyAlt) return false;
+        auto pressed = [](ImGuiKey key) { return ImGui::IsKeyPressed(key, true); };
+        CompletionState& cs = m_Completion;
+        if (cs.Open && !cs.Shown.empty())
+        {
+            int n = (int)cs.Shown.size();
+            int step = pressed(ImGuiKey_DownArrow) ? 1 : pressed(ImGuiKey_UpArrow) ? -1 : pressed(ImGuiKey_PageDown) ? 9 : pressed(ImGuiKey_PageUp) ? -9 : 0;
+            if (step)
+            {
+                cs.Selected = std::abs(step) == 1 ? (cs.Selected + step + n) % n : std::clamp(cs.Selected + step, 0, n - 1);
+                cs.ScrollToSelected = true;
+                return true;
+            }
+            if (!io.KeyShift && (pressed(ImGuiKey_Enter) || pressed(ImGuiKey_KeypadEnter) || pressed(ImGuiKey_Tab)))
+            {
+                AcceptCompletion(doc);
+                return true;
+            }
+            if (pressed(ImGuiKey_Escape))
+            {
+                cs.Open = cs.Waiting = false;
+                return true;
+            }
+        }
+        if (m_Signature.Open)
+        {
+            if (pressed(ImGuiKey_Escape))
+            {
+                m_Signature = SignatureState{};
+                return true;
+            }
+            int n = (int)m_Signature.Signatures.size();
+            if (n > 1 && (pressed(ImGuiKey_DownArrow) || pressed(ImGuiKey_UpArrow)))
+            {
+                m_Signature.Active = (m_Signature.Active + (ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1) + n) % n;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    namespace
+    {
+        // A completion item's kind: a letter in a coloured square.
+        void KindIcon(ImDrawList* draw, ImVec2 at, float size, const std::string& kind)
+        {
+            struct Look
+            {
+                const char* Kind;
+                const char* Letter;
+                ImU32 Color;
+            };
+            static const Look looks[] = {
+                { "method", "M", IM_COL32(180, 120, 220, 255) },   { "property", "P", IM_COL32(90, 160, 230, 255) },
+                { "field", "F", IM_COL32(70, 140, 200, 255) },     { "constant", "C", IM_COL32(70, 140, 200, 255) },
+                { "event", "E", IM_COL32(230, 170, 60, 255) },     { "class", "C", IM_COL32(230, 150, 60, 255) },
+                { "struct", "S", IM_COL32(100, 180, 160, 255) },   { "interface", "I", IM_COL32(110, 190, 230, 255) },
+                { "enum", "E", IM_COL32(220, 190, 80, 255) },      { "enumMember", "e", IM_COL32(220, 190, 80, 255) },
+                { "delegate", "D", IM_COL32(180, 120, 220, 255) }, { "namespace", "N", IM_COL32(150, 150, 150, 255) },
+                { "local", "L", IM_COL32(120, 190, 120, 255) },    { "parameter", "p", IM_COL32(120, 190, 120, 255) },
+                { "keyword", "K", IM_COL32(130, 130, 140, 255) },  { "typeParameter", "T", IM_COL32(100, 180, 160, 255) },
+            };
+            const Look* look = nullptr;
+            for (const Look& l : looks)
+                if (kind == l.Kind) look = &l;
+            ImU32 color = look ? look->Color : IM_COL32(130, 130, 130, 255);
+            draw->AddRectFilled(at, ImVec2(at.x + size, at.y + size), (color & 0x00FFFFFF) | 0x50000000, 3.0f);
+            const char* letter = look ? look->Letter : "?";
+            ImVec2 ts = ImGui::CalcTextSize(letter);
+            draw->AddText(ImVec2(at.x + (size - ts.x) * 0.5f, at.y + (size - ts.y) * 0.5f), color, letter);
+        }
+    }
+
+    void CodeMode::DrawAssist(Document& doc, ImVec2 text, float charW, float lineH, ImFont* font, float fontSize)
+    {
+        TextBuffer& b = doc.Buffer;
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                 ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking;
+        TextPos c = b.Cursor();
+        float lineTop = text.y + (float)c.Line * lineH;
+
+        // Parameter hints: above the line (below when there is no room).
+        if (m_Signature.Open && m_Signature.Doc == &doc && !m_Signature.Signatures.empty())
+        {
+            const auto& sig = m_Signature.Signatures[(size_t)std::clamp(m_Signature.Active, 0, (int)m_Signature.Signatures.size() - 1)];
+            float x = text.x + (float)b.VisualColumn(c.Line, c.Col) * charW - charW * 4.0f;
+            bool above = lineTop - vp->WorkPos.y > lineH * 4.0f;
+            ImGui::SetNextWindowPos(ImVec2(std::max(vp->WorkPos.x, x), above ? lineTop - 2.0f : lineTop + lineH + 2.0f), ImGuiCond_Always, ImVec2(0.0f, above ? 1.0f : 0.0f));
+            ImGui::SetNextWindowViewport(vp->ID);
+            ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(std::min(vp->WorkSize.x * 0.8f, charW * 110.0f), FLT_MAX));
+            ImGui::Begin("##signature", nullptr, flags | ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+            if (m_Signature.Signatures.size() > 1)
+            {
+                ImGui::TextDisabled("%d of %d", m_Signature.Active + 1, (int)m_Signature.Signatures.size());
+                ImGui::SetItemTooltip("Up/Down: the other overloads");
+                ImGui::SameLine();
+            }
+            // The label with the parameter being typed in bold colour.
+            ImGui::PushFont(font, std::round(fontSize * 0.93f));
+            const LanguageService::SignatureParam* param =
+                m_Signature.Param < (int)sig.Params.size() ? &sig.Params[(size_t)m_Signature.Param] : (!sig.Params.empty() && sig.Label.find("params ") != std::string::npos ? &sig.Params.back() : nullptr);
+            ImVec4 normal = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+            ImVec4 strong = ImGuiLayer::IsLightTheme() ? ImVec4(0.0f, 0.35f, 0.8f, 1.0f) : ImVec4(0.45f, 0.75f, 1.0f, 1.0f);
+            if (param)
+            {
+                std::string a = sig.Label.substr(0, (size_t)param->Start), mid = sig.Label.substr((size_t)param->Start, (size_t)param->Length),
+                            z = sig.Label.substr((size_t)(param->Start + param->Length));
+                ImGui::TextUnformatted(a.c_str());
+                ImGui::SameLine(0, 0);
+                ImGui::TextColored(strong, "%s", mid.c_str());
+                ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+                ImGui::GetWindowDrawList()->AddLine(ImVec2(r0.x, r1.y), r1, ImGui::GetColorU32(strong));
+                ImGui::SameLine(0, 0);
+                ImGui::TextUnformatted(z.c_str());
+            }
+            else ImGui::TextColored(normal, "%s", sig.Label.c_str());
+            ImGui::PopFont();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 45.0f);
+            if (!sig.Doc.empty()) ImGui::TextDisabled("%s", sig.Doc.c_str());
+            if (param && !param->Doc.empty())
+            {
+                ImGui::TextColored(strong, "%s:", param->Name.c_str());
+                ImGui::SameLine();
+                ImGui::TextUnformatted(param->Doc.c_str());
+            }
+            ImGui::PopTextWrapPos();
+            ImGui::End();
+        }
+
+        // The completion list: under the word, with the chosen item's details beside it.
+        CompletionState& cs = m_Completion;
+        if (!cs.Open || cs.Doc != &doc || cs.Shown.empty()) return;
+        ImGui::PushFont(font, std::round(fontSize * 0.93f));
+        float rowH = std::round(ImGui::GetFontSize() * 1.45f);
+        int visible = std::min(10, (int)cs.Shown.size());
+        float longest = 12.0f;
+        for (size_t i = 0; i < std::min<size_t>(cs.Shown.size(), 300); ++i) longest = std::max(longest, (float)cs.Items[(size_t)cs.Shown[i]].Label.size());
+        float width = std::clamp(longest + 6.0f, 24.0f, 56.0f) * ImGui::CalcTextSize("M").x;
+        float height = rowH * (float)visible + ImGui::GetStyle().WindowPadding.y * 2.0f;
+        float x = text.x + (float)b.VisualColumn(cs.Line, cs.StartCol) * charW - rowH - 6.0f;
+        float below = lineTop + lineH + 2.0f;
+        bool up = below + height > vp->WorkPos.y + vp->WorkSize.y;
+        ImVec2 pos(std::clamp(x, vp->WorkPos.x, vp->WorkPos.x + vp->WorkSize.x - width), up ? lineTop - height - 2.0f : below);
+        ImGui::SetNextWindowPos(pos);
+        ImGui::SetNextWindowSize(ImVec2(width, height));
+        ImGui::SetNextWindowViewport(vp->ID);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+        ImGui::Begin("##completion", nullptr, (flags & ~ImGuiWindowFlags_NoDecoration) | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                                  ImGuiWindowFlags_NoCollapse);
+        ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        ImGuiListClipper clipper;
+        clipper.Begin((int)cs.Shown.size(), rowH);
+        if (cs.ScrollToSelected) clipper.IncludeItemByIndex(cs.Selected);
+        while (clipper.Step())
+            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
+            {
+                const auto& item = cs.Items[(size_t)cs.Shown[(size_t)i]];
+                ImGui::PushID(i);
+                ImVec2 at = ImGui::GetCursorScreenPos();
+                if (ImGui::Selectable("##item", i == cs.Selected, 0, ImVec2(0, rowH)))
+                {
+                    cs.Selected = i;
+                    AcceptCompletion(doc);
+                    m_FocusCode = true;
+                    ImGui::PopID();
+                    clipper.End();
+                    goto done;
+                }
+                if (i == cs.Selected && cs.ScrollToSelected)
+                {
+                    ImGui::SetScrollHereY(0.5f);
+                    cs.ScrollToSelected = false;
+                }
+                float icon = rowH - 6.0f;
+                KindIcon(draw, ImVec2(at.x + 2.0f, at.y + 3.0f), icon, item.Kind);
+                draw->AddText(ImVec2(at.x + icon + 8.0f, at.y + (rowH - ImGui::GetFontSize()) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), item.Label.c_str());
+                ImGui::PopID();
+            }
+    done:
+        ImVec2 listMin = ImGui::GetWindowPos(), listSize = ImGui::GetWindowSize();
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopFont();
+
+        // The chosen item: what it is, and its documentation.
+        if (cs.Open && !cs.Shown.empty())
+        {
+            const auto& item = cs.Items[(size_t)cs.Shown[(size_t)std::clamp(cs.Selected, 0, (int)cs.Shown.size() - 1)]];
+            if (!item.Detail.empty())
+            {
+                float wrap = std::min(ImGui::GetFontSize() * 32.0f, vp->WorkSize.x * 0.4f);
+                bool right = listMin.x + listSize.x + wrap + 20.0f < vp->WorkPos.x + vp->WorkSize.x;
+                ImGui::SetNextWindowPos(ImVec2(right ? listMin.x + listSize.x + 2.0f : listMin.x - 2.0f, listMin.y), ImGuiCond_Always, ImVec2(right ? 0.0f : 1.0f, 0.0f));
+                ImGui::SetNextWindowViewport(vp->ID);
+                ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(wrap + 20.0f, FLT_MAX));
+                ImGui::Begin("##completiondetail", nullptr, flags | ImGuiWindowFlags_AlwaysAutoResize);
+                ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap);
+                ImGui::PushFont(font, std::round(fontSize * 0.87f));
+                ImGui::TextUnformatted(item.Detail.c_str());
+                ImGui::PopFont();
+                if (!item.Doc.empty())
+                {
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("%s", item.Doc.c_str());
+                }
+                ImGui::PopTextWrapPos();
+                ImGui::End();
+            }
+        }
     }
 }

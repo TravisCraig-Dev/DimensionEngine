@@ -86,6 +86,16 @@ namespace Editor
         // Live checking (the language service): asks for the file being edited once typing pauses, takes in results.
         void UpdateLive();
         void ApplyLive(Dimension::LanguageService::Result& result);
+        // Completion, parameter hints (signature help) and hover info, from the language service.
+        std::vector<Dimension::LanguageService::Overlay> OverlaysFor(Document& doc);
+        void PollAssist();
+        void TypedAssist(Document& doc, const std::string& typed);
+        void RequestCompletion(Document& doc, bool explicitly);
+        void RequestSignature(Document& doc);
+        void FilterCompletion(Document& doc);
+        void AcceptCompletion(Document& doc);
+        bool AssistKeys(Document& doc); // the keys the open list or hints take (true: one was taken)
+        void DrawAssist(Document& doc, ImVec2 text, float charW, float lineH, ImFont* font, float fontSize);
         void DrawPopups();
         void HandleKeys(Document& doc, int pageLines);
         void TypeText(Document& doc, const std::string& text);
@@ -134,6 +144,40 @@ namespace Editor
         fs::path m_LivePath;     // the file of the request in flight
         double m_LiveMs = -1.0;  // how long the last check took
         std::string m_LiveError;
+        uint64_t m_NextTag = 1;
+
+        struct CompletionState
+        {
+            bool Open = false, Waiting = false, Explicit = false;
+            Document* Doc = nullptr;
+            int Line = 0, StartCol = 0; // where the word being completed starts (bytes)
+            uint64_t Tag = 0;
+            std::vector<Dimension::LanguageService::CompletionItem> Items;
+            std::vector<int> Shown;     // the items matching the word, best first
+            std::vector<int> Scores;    // (0 prefix with its case, 1 prefix, 2 the capitals, 3 inside)
+            int Selected = 0;
+            bool ScrollToSelected = false;
+            uint64_t FilteredVersion = 0;
+            Dimension::Code::TextPos FilteredCursor{ -1, -1 };
+        } m_Completion;
+        struct SignatureState
+        {
+            bool Open = false;
+            Document* Doc = nullptr;
+            uint64_t Tag = 0, AskedVersion = 0;
+            Dimension::Code::TextPos AskedCursor{ -1, -1 };
+            std::vector<Dimension::LanguageService::Signature> Signatures;
+            int Active = 0, Param = 0;
+        } m_Signature;
+        struct HoverState
+        {
+            Document* Doc = nullptr;
+            int Line = -1, Col = -1;    // the word's start under the mouse
+            double Since = 0.0;
+            bool Asked = false, Have = false;
+            uint64_t Tag = 0;
+            std::string Text, Info;
+        } m_Hover;
 
         // Popups: a tab's unsaved changes, new script/folder, rename, delete.
         int m_ConfirmClose = -1;
