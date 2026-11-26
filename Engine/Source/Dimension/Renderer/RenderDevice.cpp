@@ -121,7 +121,7 @@ namespace Dimension
         VkApplicationInfo app{ VK_STRUCTURE_TYPE_APPLICATION_INFO };
         app.pApplicationName = "Dimension";
         app.pEngineName = "Dimension Engine";
-        app.engineVersion = VK_MAKE_VERSION(0, 2, 0);
+        app.engineVersion = VK_MAKE_VERSION(0, 3, 0);
         app.apiVersion = VK_API_VERSION_1_3;
 
         VkInstanceCreateInfo info{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
