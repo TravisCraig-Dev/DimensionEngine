@@ -100,6 +100,15 @@ namespace Dimension::Code
         // Every match replaced (one undo step); how many.
         int ReplaceAll(std::string_view query, std::string_view replacement, const FindOptions& options);
 
+        // ---- Marks: ranges that follow the text as it is edited (Code Mode's squiggles under build errors). Text
+        // put in or taken out before one moves it along; an edit over one squeezes it to the edit. SetText clears them.
+        struct Mark
+        {
+            TextPos Start, End;
+            int Id = 0;
+        };
+        std::vector<Mark> Marks;
+
         // ---- Columns: where a byte is drawn (tabs reach the next multiple of TabSize), and back.
         int VisualColumn(int line, int col) const;
         int ColumnAtVisual(int line, int visual) const;

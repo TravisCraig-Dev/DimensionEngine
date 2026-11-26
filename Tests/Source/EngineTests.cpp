@@ -61,6 +61,7 @@
 #include <Dimension/Terrain/Terrain.h>
 #include <Dimension/Code/TextBuffer.h>
 #include <Dimension/Code/CSharpLexer.h>
+#include <Dimension/Code/BuildDiagnostics.h>
 #include <Dimension/Animation/Timeline.h>
 #include <Dimension/Animation/ClipAsset.h>
 #include <Dimension/Music/SongPlayer.h>
@@ -21803,6 +21804,64 @@ namespace
         CHECK(IsCSharpKeyword("foreach") && IsCSharpKeyword("float") && !IsCSharpKeyword("Update"));
     }
 
+    void TestCodeBuildDiagnostics()
+    {
+        using namespace Dimension::Code;
+        Diagnostic d;
+        // A compiler error with its place and project.
+        CHECK(ParseBuildLine("C:\\Game\\Scripts\\Player.cs(12,5): error CS1002: ; expected [C:\\Game\\GameScripts.csproj]", d));
+        CHECK(d.File == "C:\\Game\\Scripts\\Player.cs" && d.Line == 11 && d.Col == 4 && d.EndLine == -1);
+        CHECK(d.Level == Severity::Error && d.Code == "CS1002" && d.Message == "; expected" && d.Project == "C:\\Game\\GameScripts.csproj");
+        // A range, a Linux path, a warning, a message with colons in it.
+        CHECK(ParseBuildLine("  /home/me/Game/Scripts/A.cs(3,9,3,14): warning CS0168: The variable 'x' is declared: never used", d));
+        CHECK(d.File == "/home/me/Game/Scripts/A.cs" && d.Line == 2 && d.Col == 8 && d.EndLine == 2 && d.EndCol == 13);
+        CHECK(d.Level == Severity::Warning && d.Code == "CS0168" && d.Message == "The variable 'x' is declared: never used" && d.Project.empty());
+        // No file: a tool's name; and a node prefix.
+        CHECK(ParseBuildLine("1>CSC : error CS2001: Source file 'X.cs' could not be found.", d));
+        CHECK(d.File == "CSC" && d.Line == -1 && d.Code == "CS2001");
+        CHECK(ParseBuildLine("C:\\sdk\\Microsoft.Common.targets(4,5): error MSB3021: Unable to copy file. [C:\\G\\G.csproj]", d));
+        CHECK(d.Code == "MSB3021" && d.Line == 3 && d.Message == "Unable to copy file.");
+        // Not diagnostics.
+        CHECK(!ParseBuildLine("Build succeeded.", d));
+        CHECK(!ParseBuildLine("    0 Error(s)", d));
+        CHECK(!ParseBuildLine("  GameScripts -> C:\\Game\\.dimension\\ScriptAssemblies\\GameScripts.dll", d));
+        CHECK(!ParseBuildLine("C:\\error handling\\notes.txt", d));
+        // A whole build: MSBuild's summary repeats are dropped.
+        std::string output = "C:\\G\\A.cs(1,1): error CS0116: A namespace cannot directly contain members [C:\\G\\G.csproj]\r\n"
+                             "Build FAILED.\r\n"
+                             "C:\\G\\A.cs(1,1): error CS0116: A namespace cannot directly contain members [C:\\G\\G.csproj]\r\n"
+                             "C:\\G\\B.cs(2,3): warning CS0414: unused [C:\\G\\G.csproj]\r\n";
+        auto all = ParseBuildOutput(output);
+        CHECK(all.size() == 2 && all[0].Code == "CS0116" && all[1].Level == Severity::Warning);
+        // UTF-16 columns: "é" is one unit in two bytes, an emoji two units in four.
+        std::string line = "a\xC3\xA9" "b\xF0\x9F\x98\x80" "c";
+        CHECK(Utf16ToByte(line, 0) == 0 && Utf16ToByte(line, 2) == 3 && Utf16ToByte(line, 3) == 4 && Utf16ToByte(line, 5) == 8 && Utf16ToByte(line, 99) == 9);
+        CHECK(ByteToUtf16(line, 3) == 2 && ByteToUtf16(line, 8) == 5 && ByteToUtf16(line, 9) == 6);
+
+        // Marks follow the text.
+        TextBuffer b;
+        b.SetText("int a = 1;\nint b = c;\nint d;");
+        b.Marks.push_back({ { 1, 8 }, { 1, 9 }, 7 }); // under "c"
+        b.SetCursor({ 0, 0 });
+        b.Insert("// x\n");                            // a line above
+        CHECK(b.Marks[0].Start == (TextPos{ 2, 8 }) && b.Marks[0].End == (TextPos{ 2, 9 }));
+        b.SetCursor({ 2, 4 });
+        b.Insert("bb");                                // before it on its line
+        CHECK(b.Marks[0].Start == (TextPos{ 2, 10 }) && b.Marks[0].End == (TextPos{ 2, 11 }));
+        b.SetCursor({ 2, 11 });
+        b.Insert("x");                                 // after it: stays
+        CHECK(b.Marks[0].Start == (TextPos{ 2, 10 }) && b.Marks[0].End == (TextPos{ 2, 11 }));
+        b.Undo();
+        b.Undo();
+        b.Undo();                                      // undone: back where it began
+        CHECK(b.Marks[0].Start == (TextPos{ 1, 8 }) && b.Marks[0].End == (TextPos{ 1, 9 }));
+        b.SetSelection({ 0, 5 }, { 1, 9 });            // removed with what it was in
+        b.DeleteSelection();
+        CHECK(b.Marks[0].Start == (TextPos{ 0, 5 }) && b.Marks[0].End == (TextPos{ 0, 5 }));
+        b.SetText("x");
+        CHECK(b.Marks.empty());
+    }
+
     void TestMusicExport()
     {
         using namespace Dimension::Music;
@@ -22168,6 +22227,7 @@ int main(int argc, char** argv)
     Run("Music export", TestMusicExport);
     Run("Code text buffer", TestCodeTextBuffer);
     Run("Code lexer", TestCodeLexer);
+    Run("Code build diagnostics", TestCodeBuildDiagnostics);
     Run("Sony pad reports", TestSonyPadReports);
     Run("Splash screen image", TestSplashScreenImage);
 

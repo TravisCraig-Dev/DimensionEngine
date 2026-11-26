@@ -78,6 +78,7 @@ namespace Dimension::Code
         IndentUnit = tabs > spaces ? "\t" : std::string((size_t)TabSize, ' ');
         m_Cursor = m_Anchor = {};
         m_PreferredVisual = -1;
+        Marks.clear();
         m_Undo.clear();
         m_Redo.clear();
         m_SavedId = 0;
@@ -297,6 +298,19 @@ namespace Dimension::Code
             for (size_t i = 1; i < parts.size(); ++i) m_Lines.insert(m_Lines.begin() + a.Line + (long long)i, parts[i]);
             end = { a.Line + (int)parts.size() - 1, (int)parts.back().size() };
             m_Lines[(size_t)end.Line] += tail;
+        }
+        // The marks after the edit move with the text; ones inside what was removed go to the edit.
+        auto follow = [&](TextPos& p, bool isEnd) {
+            if (p <= a) return;
+            if (p < b) p = isEnd ? end : a;
+            else if (p.Line == b.Line) p = { end.Line, end.Col + (p.Col - b.Col) };
+            else p.Line += end.Line - b.Line;
+        };
+        for (Mark& m : Marks)
+        {
+            follow(m.Start, false);
+            follow(m.End, true);
+            if (m.End < m.Start) m.End = m.Start;
         }
         ++m_Version;
         return end;

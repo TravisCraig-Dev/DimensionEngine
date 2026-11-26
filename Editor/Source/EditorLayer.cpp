@@ -6371,14 +6371,23 @@ namespace Editor
         std::vector<std::string> problems;
         if (!CSharpProject::GenerateAssemblyProjects(project, ExecutableDirectory() / "managed", problems))
         {
-            for (const std::string& p : problems) Log::Error("Script assemblies: {}", p);
+            m_CSharpDiagnostics = std::make_shared<std::vector<Dimension::Code::Diagnostic>>();
+            for (const std::string& p : problems)
+            {
+                Log::Error("Script assemblies: {}", p);
+                Dimension::Code::Diagnostic d;
+                d.File = "Script assemblies";
+                d.Message = p;
+                m_CSharpDiagnostics->push_back(std::move(d));
+            }
             m_CSharpBuild = std::make_shared<std::atomic<int>>(3);
             return;
         }
         m_CSharpBuild = std::make_shared<std::atomic<int>>(1);
+        m_CSharpDiagnostics = std::make_shared<std::vector<Dimension::Code::Diagnostic>>();
         std::string command = CSharpProject::BuildCommand(project);
         Log::Info("Compiling C# scripts...");
-        std::thread([state = m_CSharpBuild, command] {
+        std::thread([state = m_CSharpBuild, diagnostics = m_CSharpDiagnostics, command] {
             FILE* pipe = Dimension::Platform::OpenPipe(command);
             if (!pipe)
             {
@@ -6393,6 +6402,9 @@ namespace Editor
                 while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
                 if (text.empty() || std::find(seen.begin(), seen.end(), text) != seen.end()) continue;
                 seen.push_back(text);
+                Dimension::Code::Diagnostic d;
+                if (Dimension::Code::ParseBuildLine(text, d) && std::find(diagnostics->begin(), diagnostics->end(), d) == diagnostics->end())
+                    diagnostics->push_back(std::move(d));
                 if (text.find(": error") != std::string::npos) Log::Error("{}", text);
                 else if (text.find(": warning") != std::string::npos) Log::Warn("{}", text);
                 else Log::Trace("{}", text);
@@ -6408,6 +6420,12 @@ namespace Editor
         if (m_CSharpBuild)
         {
             int state = m_CSharpBuild->load();
+            if ((state == 2 || state == 3) && m_Code && m_CSharpDiagnostics)
+            {
+                // To Code Mode: squiggles under them and its Problems list.
+                m_Code->SetBuildResult(std::move(*m_CSharpDiagnostics), state == 2);
+                m_CSharpDiagnostics.reset();
+            }
             if (state == 3)
             {
                 Log::Error("C# build failed (see errors above); keeping the previous scripts");

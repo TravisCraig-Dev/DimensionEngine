@@ -2,6 +2,7 @@
 #include "EditorContext.h"
 #include <Dimension/Code/TextBuffer.h>
 #include <Dimension/Code/CSharpLexer.h>
+#include <Dimension/Code/BuildDiagnostics.h>
 #include <imgui.h>
 #include <functional>
 #include <memory>
@@ -12,7 +13,8 @@ namespace Editor
 {
     // Code Mode: a full-screen script workspace (like an IDE's) in place of the editor's windows: the project's C#
     // scripts in a tree, open files in tabs, and a code editor (syntax colouring, auto-indent, brackets, undo, find and
-    // replace). Saving a script rebuilds the scripts as an outside edit would (the editor's C# build).
+    // replace). Saving a script rebuilds the scripts as an outside edit would (the editor's C# build); what the build
+    // reports is underlined in the files and listed under them (Problems).
     class CodeMode
     {
     public:
@@ -30,6 +32,18 @@ namespace Editor
         // Set by the editor: build the scripts now, and how the last build went (0 none, 1 building, 2 ok, 3 failed).
         std::function<void()> BuildScripts;
         std::function<int()> BuildState;
+        // The last build's errors and warnings: listed, and underlined in the files (the list opens when it failed).
+        void SetBuildResult(std::vector<Dimension::Code::Diagnostic> diagnostics, bool succeeded);
+
+        struct Problem
+        {
+            Dimension::Code::Diagnostic D; // (its place is kept up to date from the file's mark while the file is open)
+            fs::path Path;                 // the file (empty when it is about none)
+            std::string Key;               // Path for comparing
+        };
+        const std::vector<Problem>& Problems() const { return m_Problems; }
+        // Automation and tests: to a problem's place (opens its file).
+        void GoToProblem(int index);
 
         // An open file.
         struct Document
@@ -56,6 +70,11 @@ namespace Editor
         void DrawCode(Document& doc, const ImVec2& size);
         void DrawFindBar(Document& doc);
         void DrawStatusBar();
+        void DrawProblems(const ImVec2& size);
+        void NextProblem(bool backwards);
+        // The problems in a file as marks in its buffer (so they follow edits), and their places back when it closes.
+        void AttachMarks(Document& doc);
+        void DetachMarks(Document& doc);
         void DrawPopups();
         void HandleKeys(Document& doc, int pageLines);
         void TypeText(Document& doc, const std::string& text);
@@ -90,6 +109,13 @@ namespace Editor
         std::string m_Find, m_Replace;
         Dimension::Code::TextBuffer::FindOptions m_FindOptions;
         std::string m_FindMessage;
+
+        // The last build's problems.
+        std::vector<Problem> m_Problems;
+        std::vector<std::string> m_ErrorFiles; // the keys of files with errors (red in the explorer)
+        bool m_HaveBuildResult = false, m_LastBuildOk = false;
+        bool m_ShowProblems = false, m_ShowErrors = true, m_ShowWarnings = true;
+        int m_SelectedProblem = -1;
 
         // Popups: a tab's unsaved changes, new script/folder, rename, delete.
         int m_ConfirmClose = -1;

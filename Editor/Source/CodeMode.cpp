@@ -13,7 +13,9 @@
 #include <sstream>
 
 using namespace Dimension;
+using Dimension::Code::Diagnostic;
 using Dimension::Code::LexState;
+using Dimension::Code::Severity;
 using Dimension::Code::TextBuffer;
 using Dimension::Code::TextPos;
 using Dimension::Code::Token;
@@ -103,6 +105,25 @@ namespace Editor
         }
 
         // The pair a typed opener closes with ('\0': none).
+        // A path to compare files by (absolute, normalised, one case).
+        std::string PathKey(const fs::path& p)
+        {
+            std::error_code ec;
+            fs::path abs = fs::absolute(p, ec);
+            std::string key = (ec ? p : abs).lexically_normal().generic_string();
+            std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+            return key;
+        }
+
+        bool IsWordByte(char c) { return std::isalnum((unsigned char)c) || c == '_' || (unsigned char)c >= 0x80; }
+
+        ImU32 SeverityColor(Severity level)
+        {
+            bool light = ImGuiLayer::IsLightTheme();
+            return level == Severity::Error ? (light ? IM_COL32(220, 30, 30, 255) : IM_COL32(244, 71, 71, 255))
+                                            : (light ? IM_COL32(190, 130, 0, 255) : IM_COL32(220, 180, 60, 255));
+        }
+
         char Closer(char c)
         {
             switch (c)
@@ -189,6 +210,7 @@ namespace Editor
         doc->Path = path;
         doc->Buffer.SetText(text);
         doc->DiskTime = fs::last_write_time(path, ec);
+        AttachMarks(*doc);
         m_Docs.push_back(std::move(doc));
         m_Current = (int)m_Docs.size() - 1;
         m_SelectTab = m_Current;
@@ -218,8 +240,10 @@ namespace Editor
         std::string text;
         if (!ReadFile(doc.Path, text)) return;
         TextPos cursor = doc.Buffer.Cursor();
+        DetachMarks(doc);
         doc.Buffer.SetText(text);
         doc.Buffer.SetCursor(cursor);
+        AttachMarks(doc);
         std::error_code ec;
         doc.DiskTime = fs::last_write_time(doc.Path, ec);
         doc.ChangedOnDisk = false;
@@ -228,6 +252,7 @@ namespace Editor
     void CodeMode::CloseTab(int index)
     {
         if (index < 0 || index >= (int)m_Docs.size()) return;
+        DetachMarks(*m_Docs[(size_t)index]);
         m_Docs.erase(m_Docs.begin() + index);
         if (m_Current >= (int)m_Docs.size()) m_Current = (int)m_Docs.size() - 1;
         else if (m_Current > index) --m_Current;
@@ -319,10 +344,13 @@ namespace Editor
         float status = ImGui::GetFrameHeight() + 2.0f;
         ImVec2 avail = ImGui::GetContentRegionAvail();
         avail.y -= status;
+        float problems = m_ShowProblems ? std::round(std::clamp(avail.y * 0.25f, ImGui::GetTextLineHeightWithSpacing() * 6.0f, 260.0f)) : 0.0f;
+        avail.y -= problems;
         float explorer = std::clamp(avail.x * 0.18f, 180.0f, 320.0f);
         DrawExplorer(ImVec2(explorer, avail.y));
         ImGui::SameLine();
         DrawDocuments(ImVec2(0.0f, avail.y));
+        if (m_ShowProblems) DrawProblems(ImVec2(0.0f, problems - ImGui::GetStyle().ItemSpacing.y));
         DrawStatusBar();
         DrawPopups();
         ImGui::End();
@@ -475,9 +503,16 @@ namespace Editor
             for (auto& d : m_Docs)
                 if (fs::equivalent(d->Path, f, ec)) dirty = d->Buffer.IsDirty();
             std::string label = f.filename().string() + (dirty ? " *" : "");
+            bool errors = std::find(m_ErrorFiles.begin(), m_ErrorFiles.end(), PathKey(f)) != m_ErrorFiles.end();
+            if (errors) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(SeverityColor(Severity::Error)));
             ImGui::TreeNodeEx(f.string().c_str(), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_SpanAvailWidth |
                                                       (selected ? ImGuiTreeNodeFlags_Selected : 0),
                               "%s", label.c_str());
+            if (errors)
+            {
+                ImGui::PopStyleColor();
+                ImGui::SetItemTooltip("Has build errors");
+            }
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) OpenFile(f);
             itemMenu(f, false);
         }
@@ -657,12 +692,27 @@ namespace Editor
             ImGui::SameLine(0, 24);
             ImGui::TextDisabled("%d%%", (int)std::lround(m_Zoom * 100.0f));
         }
+        // The problem counts (click: the Problems list) and how the build went.
+        int errors = 0, warnings = 0;
+        for (const Problem& p : m_Problems) (p.D.Level == Severity::Error ? errors : warnings)++;
+        char counts[64];
+        std::snprintf(counts, sizeof(counts), "%d error%s, %d warning%s", errors, errors == 1 ? "" : "s", warnings, warnings == 1 ? "" : "s");
         int state = BuildState ? BuildState() : 0;
-        const char* text = state == 1 ? "Building..." : state == 2 ? "Build succeeded" : state == 3 ? "Build failed (errors in the Console)" : "";
+        if (state == 0 && m_HaveBuildResult) state = m_LastBuildOk ? 2 : 3; // (the editor forgets it once taken in)
+        const char* text = state == 1 ? "Building..." : state == 2 ? "Build succeeded" : state == 3 ? "Build failed" : "";
+        float right = ImGui::GetWindowContentRegionMax().x;
+        float textW = *text ? ImGui::CalcTextSize(text).x : 0.0f;
+        float countsW = ImGui::CalcTextSize(counts).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        ImGui::SameLine(right - textW - (*text ? 24.0f : 0.0f) - countsW);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        if (errors) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(SeverityColor(Severity::Error)));
+        if (ImGui::SmallButton(counts)) m_ShowProblems = !m_ShowProblems;
+        if (errors) ImGui::PopStyleColor();
+        ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("Problems from the last build (F8: next, Shift+F8: previous)");
         if (*text)
         {
-            float w = ImGui::CalcTextSize(text).x;
-            ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - w);
+            ImGui::SameLine(right - textW);
             ImVec4 col = state == 3 ? ImVec4(1.0f, 0.45f, 0.4f, 1.0f) : state == 2 ? ImVec4(0.5f, 0.85f, 0.5f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
             ImGui::TextColored(col, "%s", text);
         }
@@ -989,6 +1039,7 @@ namespace Editor
                 if (m_Find.empty() && b.HasSelection()) m_Find = b.SelectedText();
                 FindNext(doc, shift);
             }
+            else if (pressed(ImGuiKey_F8)) NextProblem(shift);
             else if (pressed(ImGuiKey_Escape) && b.HasSelection()) b.SetCursor(b.Cursor()), moved = true;
         }
 
@@ -1191,6 +1242,53 @@ namespace Editor
                 }
             }
         }
+        // The build's problems: a wavy line under each (a short one where it has no width), the message on hover.
+        const Problem* hovered = nullptr;
+        int hoverLine = (int)std::floor((mouse.y - text.y) / lineH);
+        int hoverVisual = (int)std::floor((mouse.x - text.x) / charW);
+        bool canHover = overText && mouse.x > gutterRight && !m_Dragging;
+        std::vector<int> lineLevel((size_t)(last - first + 1), -1); // per visible line: the worst problem on it
+        for (const TextBuffer::Mark& m : b.Marks)
+        {
+            if (m.Id < 0 || m.Id >= (int)m_Problems.size()) continue;
+            const Problem& p = m_Problems[(size_t)m.Id];
+            if ((p.D.Level == Severity::Error && !m_ShowErrors) || (p.D.Level == Severity::Warning && !m_ShowWarnings)) continue;
+            if (m.End.Line < first || m.Start.Line > last) continue;
+            ImU32 color = SeverityColor(p.D.Level);
+            for (int l = std::max(first, m.Start.Line); l <= std::min(last, m.End.Line); ++l)
+            {
+                int& level = lineLevel[(size_t)(l - first)];
+                level = level < 0 ? (int)p.D.Level : std::min(level, (int)p.D.Level);
+                int va = l == m.Start.Line ? b.VisualColumn(l, m.Start.Col) : b.VisualColumn(l, (int)b.IndentOf(l).size());
+                int vb = l == m.End.Line ? b.VisualColumn(l, m.End.Col) : b.VisualColumn(l, (int)b.Line(l).size());
+                if (vb <= va) vb = va + 1;
+                float x0 = text.x + (float)va * charW, x1 = text.x + (float)vb * charW;
+                float y = text.y + (float)l * lineH + lineH - 3.0f;
+                float wave = std::max(2.0f, std::round(charW * 0.35f));
+                ImVec2 pts[256];
+                int n = 0;
+                for (float x = x0; n < 255; x += wave)
+                {
+                    pts[n++] = ImVec2(std::min(x, x1), y + ((n & 1) ? -1.5f : 1.0f));
+                    if (x >= x1) break;
+                }
+                draw->AddPolyline(pts, n, color, ImDrawFlags_None, 1.2f);
+                if (canHover && l == hoverLine && hoverVisual >= va && hoverVisual < vb && (!hovered || p.D.Level < hovered->D.Level)) hovered = &p;
+            }
+        }
+        if (hovered)
+        {
+            ImGui::PopFont(); // (the tooltip in the interface's font)
+            ImGui::BeginTooltip();
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(SeverityColor(hovered->D.Level)), "%s %s", hovered->D.Level == Severity::Error ? "error" : "warning",
+                               hovered->D.Code.c_str());
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 40.0f);
+            ImGui::TextUnformatted(hovered->D.Message.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+            ImGui::PushFont(font, fontSize);
+        }
+
         // The cursor (blinking; steady for a moment after it moves).
         if (focused)
         {
@@ -1212,10 +1310,240 @@ namespace Editor
             float y = text.y + (float)l * lineH + (lineH - fontSize) * 0.5f;
             ImU32 color = l == cursor.Line ? (light ? IM_COL32(30, 30, 30, 255) : IM_COL32(200, 200, 200, 255))
                                            : (light ? IM_COL32(140, 140, 140, 255) : IM_COL32(110, 110, 110, 255));
+            int level = lineLevel[(size_t)(l - first)];
+            if (level >= 0) color = SeverityColor((Severity)level); // (a line with a problem: its number in the problem's colour)
             draw->AddText(drawFont, fontSize, ImVec2(inner.Min.x + charW, y), color, number);
+        }
+        // Where the problems are in the whole file: ticks at the right edge.
+        if (!b.Marks.empty())
+        {
+            float trackTop = inner.Min.y, trackH = inner.GetHeight();
+            for (const TextBuffer::Mark& m : b.Marks)
+            {
+                if (m.Id < 0 || m.Id >= (int)m_Problems.size()) continue;
+                Severity level = m_Problems[(size_t)m.Id].D.Level;
+                if ((level == Severity::Error && !m_ShowErrors) || (level == Severity::Warning && !m_ShowWarnings)) continue;
+                float y = trackTop + trackH * ((float)m.Start.Line + 0.5f) / (float)std::max(1, lines);
+                draw->AddRectFilled(ImVec2(inner.Max.x - 6.0f, y - 1.5f), ImVec2(inner.Max.x - 1.0f, y + 1.5f), SeverityColor(level));
+            }
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();
         ImGui::PopFont();
+    }
+
+    // ---- Problems (the last build's errors and warnings)
+
+    void CodeMode::SetBuildResult(std::vector<Diagnostic> diagnostics, bool succeeded)
+    {
+        for (auto& doc : m_Docs) doc->Buffer.Marks.clear();
+        m_Problems.clear();
+        m_ErrorFiles.clear();
+        m_SelectedProblem = -1;
+        for (Diagnostic& d : diagnostics)
+        {
+            Problem p;
+            p.D = std::move(d);
+            fs::path file = p.D.File;
+            std::error_code ec;
+            if (p.D.Line >= 0 && !p.D.File.empty() && file.is_absolute() && fs::exists(file, ec))
+            {
+                p.Path = file;
+                p.Key = PathKey(file);
+            }
+            m_Problems.push_back(std::move(p));
+        }
+        // Errors first, then by file and place.
+        std::stable_sort(m_Problems.begin(), m_Problems.end(), [](const Problem& a, const Problem& b) {
+            if (a.D.Level != b.D.Level) return a.D.Level < b.D.Level;
+            if (a.Key != b.Key) return a.Key < b.Key;
+            if (a.D.Line != b.D.Line) return a.D.Line < b.D.Line;
+            return a.D.Col < b.D.Col;
+        });
+        int errors = 0;
+        for (const Problem& p : m_Problems)
+            if (p.D.Level == Severity::Error)
+            {
+                ++errors;
+                if (!p.Key.empty() && std::find(m_ErrorFiles.begin(), m_ErrorFiles.end(), p.Key) == m_ErrorFiles.end()) m_ErrorFiles.push_back(p.Key);
+            }
+        for (auto& doc : m_Docs) AttachMarks(*doc);
+        m_HaveBuildResult = true;
+        m_LastBuildOk = succeeded;
+        if (!succeeded && errors > 0) m_ShowProblems = true;
+    }
+
+    void CodeMode::AttachMarks(Document& doc)
+    {
+        TextBuffer& b = doc.Buffer;
+        b.Marks.clear();
+        std::string key = PathKey(doc.Path);
+        for (size_t i = 0; i < m_Problems.size(); ++i)
+        {
+            const Problem& p = m_Problems[i];
+            if (p.Key != key || p.D.Line < 0) continue;
+            int line = std::min(p.D.Line, b.LineCount() - 1);
+            const std::string& s = b.Line(line);
+            TextPos start{ line, Code::Utf16ToByte(s, p.D.Col) };
+            TextPos end = start;
+            if (p.D.EndLine >= 0)
+            {
+                int endLine = std::clamp(p.D.EndLine, line, b.LineCount() - 1);
+                end = { endLine, Code::Utf16ToByte(b.Line(endLine), p.D.EndCol) };
+            }
+            if (end <= start)
+            {
+                // Only a place: under the word there (or the one character).
+                end = start;
+                if (end.Col < (int)s.size() && IsWordByte(s[(size_t)end.Col]))
+                    while (end.Col < (int)s.size() && IsWordByte(s[(size_t)end.Col])) end.Col = Code::NextChar(s, end.Col);
+                else if (end.Col < (int)s.size()) end.Col = Code::NextChar(s, end.Col);
+            }
+            b.Marks.push_back({ start, end, (int)i });
+        }
+    }
+
+    void CodeMode::DetachMarks(Document& doc)
+    {
+        // The places the edits moved them to (what the list shows, and where they go when the file opens again).
+        for (const TextBuffer::Mark& m : doc.Buffer.Marks)
+        {
+            if (m.Id < 0 || m.Id >= (int)m_Problems.size()) continue;
+            Diagnostic& d = m_Problems[(size_t)m.Id].D;
+            d.Line = m.Start.Line;
+            d.Col = Code::ByteToUtf16(doc.Buffer.Line(m.Start.Line), m.Start.Col);
+            d.EndLine = m.End.Line;
+            d.EndCol = Code::ByteToUtf16(doc.Buffer.Line(m.End.Line), m.End.Col);
+        }
+        doc.Buffer.Marks.clear();
+    }
+
+    void CodeMode::GoToProblem(int index)
+    {
+        if (index < 0 || index >= (int)m_Problems.size()) return;
+        m_SelectedProblem = index;
+        const Problem& p = m_Problems[(size_t)index];
+        if (p.Path.empty() || !OpenFile(p.Path)) return;
+        Document* doc = Current();
+        if (!doc) return;
+        for (const TextBuffer::Mark& m : doc->Buffer.Marks)
+            if (m.Id == index)
+            {
+                doc->Buffer.SetCursor(m.Start);
+                doc->Buffer.BreakMerge();
+                doc->ScrollToCursor = true;
+                break;
+            }
+        m_FocusCode = true;
+        m_BlinkStart = ImGui::GetTime();
+    }
+
+    void CodeMode::NextProblem(bool backwards)
+    {
+        // The next one shown in the list that is in a file (wrapping around).
+        int n = (int)m_Problems.size();
+        for (int step = 1; step <= n; ++step)
+        {
+            int i = m_SelectedProblem < 0 ? (backwards ? n - step : step - 1) : ((m_SelectedProblem + (backwards ? -step : step)) % n + n) % n;
+            const Problem& p = m_Problems[(size_t)i];
+            bool shown = p.D.Level == Severity::Error ? m_ShowErrors : m_ShowWarnings;
+            if (shown && !p.Path.empty())
+            {
+                m_ShowProblems = true;
+                GoToProblem(i);
+                return;
+            }
+        }
+    }
+
+    void CodeMode::DrawProblems(const ImVec2& size)
+    {
+        ImGui::BeginChild("##problems", size, ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
+        int errors = 0, warnings = 0;
+        for (const Problem& p : m_Problems) (p.D.Level == Severity::Error ? errors : warnings)++;
+        ImGui::TextDisabled("PROBLEMS");
+        ImGui::SameLine(0, 16);
+        char label[48];
+        std::snprintf(label, sizeof(label), "Errors (%d)", errors);
+        ImGui::Checkbox(label, &m_ShowErrors);
+        ImGui::SameLine();
+        std::snprintf(label, sizeof(label), "Warnings (%d)", warnings);
+        ImGui::Checkbox(label, &m_ShowWarnings);
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - ImGui::CalcTextSize("x").x - ImGui::GetStyle().FramePadding.x * 2.0f);
+        if (ImGui::SmallButton("x")) m_ShowProblems = false;
+        ImGui::SetItemTooltip("Hide (the counts in the status bar bring it back)");
+
+        // The places in open files are their marks' (they follow edits made since the build).
+        auto placeOf = [&](int index, int& line, int& col) {
+            const Problem& p = m_Problems[(size_t)index];
+            line = p.D.Line;
+            col = p.D.Col;
+            for (auto& doc : m_Docs)
+                for (const TextBuffer::Mark& m : doc->Buffer.Marks)
+                    if (m.Id == index)
+                    {
+                        line = m.Start.Line;
+                        col = Code::ByteToUtf16(doc->Buffer.Line(m.Start.Line), m.Start.Col);
+                    }
+        };
+        fs::path project = Project::GetDirectory();
+        bool any = false;
+        if (ImGui::BeginTable("##problemlist", 4, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV,
+                              ImGui::GetContentRegionAvail()))
+        {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("Code", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("MSB3021 ").x + 20.0f);
+            ImGui::TableSetupColumn("Description", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthFixed, 240.0f);
+            ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("0000:000").x + 8.0f);
+            ImGui::TableHeadersRow();
+            for (int i = 0; i < (int)m_Problems.size(); ++i)
+            {
+                const Problem& p = m_Problems[(size_t)i];
+                if ((p.D.Level == Severity::Error && !m_ShowErrors) || (p.D.Level == Severity::Warning && !m_ShowWarnings)) continue;
+                any = true;
+                ImGui::PushID(i);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImVec4 color = ImGui::ColorConvertU32ToFloat4(SeverityColor(p.D.Level));
+                // The whole row clicks (to the place in the file).
+                if (ImGui::Selectable("##row", m_SelectedProblem == i, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) GoToProblem(i);
+                if (ImGui::BeginPopupContextItem())
+                {
+                    if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText((p.D.Code + ": " + p.D.Message).c_str());
+                    ImGui::EndPopup();
+                }
+                ImGui::SameLine(0, 0);
+                ImGui::TextColored(color, "%s %s", p.D.Level == Severity::Error ? "x" : "!", p.D.Code.c_str());
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(p.D.Message.c_str());
+                if (ImGui::IsItemHovered() && ImGui::CalcTextSize(p.D.Message.c_str()).x > ImGui::GetColumnWidth()) ImGui::SetTooltip("%s", p.D.Message.c_str());
+                ImGui::TableNextColumn();
+                if (!p.Path.empty())
+                {
+                    std::error_code ec;
+                    fs::path rel = fs::relative(p.Path, project, ec);
+                    std::string shown = (ec || rel.empty() || rel.native()[0] == '.' ? p.Path : rel).generic_string();
+                    ImGui::TextUnformatted(shown.c_str());
+                    ImGui::TableNextColumn();
+                    int line = 0, col = 0;
+                    placeOf(i, line, col);
+                    ImGui::Text("%d:%d", line + 1, col + 1);
+                }
+                else
+                {
+                    ImGui::TextDisabled("%s", p.D.File.empty() ? "-" : p.D.File.c_str());
+                    ImGui::TableNextColumn();
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (!any)
+        {
+            ImGui::SetCursorPos(ImVec2(ImGui::GetStyle().WindowPadding.x + 8.0f, ImGui::GetFrameHeightWithSpacing() * 2.0f));
+            ImGui::TextDisabled(!m_HaveBuildResult ? "Build the scripts (Ctrl+B) to see their problems here." : m_Problems.empty() ? "No problems: the last build was clean." : "Nothing shown (see the filters above).");
+        }
+        ImGui::EndChild();
     }
 }
