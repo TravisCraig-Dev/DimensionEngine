@@ -212,6 +212,7 @@ namespace Editor::UI
         case AssetType::AvatarMask: return { 0.85f, 0.6f, 0.95f, 1 };
         case AssetType::VisualEffect: return { 1.0f, 0.55f, 0.85f, 1 };
         case AssetType::Song: return { 1.0f, 0.6f, 0.25f, 1 };
+        case AssetType::ImageDocument: return { 0.3f, 0.75f, 1.0f, 1 };
         default: return { 0.5f, 0.5f, 0.5f, 1 };
         }
     }
@@ -240,6 +241,7 @@ namespace Editor::UI
         case AssetType::AvatarMask: return "MASK";
         case AssetType::VisualEffect: return "VFX";
         case AssetType::Song: return "SONG";
+        case AssetType::ImageDocument: return "IMG";
         case AssetType::UIStyleSheet: return "USS";
         case AssetType::VideoClip: return "VIDEO";
         default: return "FILE";

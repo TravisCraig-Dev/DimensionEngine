@@ -127,6 +127,10 @@ namespace
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <Dimension/Image/ImagePaint.h>
+#include <Dimension/Image/ImageEdit.h>
+#include <Dimension/Image/ImageFilters.h>
+#include <Dimension/Image/ImageGame.h>
 #include <cmath>
 #include <chrono>
 #include <fstream>
@@ -20810,6 +20814,1246 @@ namespace
         return crossings > 1 ? (float)(crossings - 1) * rate / (float)(last - first) : 0.0f;
     }
 
+    void TestImageDocument()
+    {
+        using namespace Dimension::Imaging;
+        // Blend modes on known values (backdrop 0.5 grey, source 0.25).
+        const glm::vec3 b(0.5f), s(0.25f);
+        CHECK(Near(BlendColors(LayerBlend::Multiply, b, s), glm::vec3(0.125f)));
+        CHECK(Near(BlendColors(LayerBlend::Screen, b, s), glm::vec3(0.625f)));
+        CHECK(Near(BlendColors(LayerBlend::Darken, b, s), glm::vec3(0.25f)));
+        CHECK(Near(BlendColors(LayerBlend::Lighten, b, s), glm::vec3(0.5f)));
+        CHECK(Near(BlendColors(LayerBlend::Difference, b, s), glm::vec3(0.25f)));
+        CHECK(Near(BlendColors(LayerBlend::LinearDodge, b, s), glm::vec3(0.75f)));
+        CHECK(Near(BlendColors(LayerBlend::Subtract, b, s), glm::vec3(0.25f)));
+        CHECK(Near(BlendColors(LayerBlend::Divide, b, glm::vec3(0.5f)), glm::vec3(1.0f)));
+        CHECK(Near(BlendColors(LayerBlend::Overlay, b, s), glm::vec3(0.25f))); // (backdrop <= 0.5: multiply by 2)
+        CHECK(Near(BlendColors(LayerBlend::HardMix, glm::vec3(0.6f), glm::vec3(0.5f)), glm::vec3(1.0f)));
+        // Luminosity keeps the backdrop's hue and takes the source's lightness; Color the other way round.
+        glm::vec3 red(1, 0, 0), grey(0.5f);
+        glm::vec3 lum = BlendColors(LayerBlend::Luminosity, red, grey);
+        CHECK(lum.r > lum.g && Near(0.3f * lum.r + 0.59f * lum.g + 0.11f * lum.b, 0.5f));
+        glm::vec3 col = BlendColors(LayerBlend::Color, grey, red);
+        CHECK(col.r > col.g && Near(0.3f * col.r + 0.59f * col.g + 0.11f * col.b, 0.5f));
+        for (int m = 0; m < (int)LayerBlend::Count; ++m) CHECK(LayerBlendFromName(LayerBlendName((LayerBlend)m)) == (LayerBlend)m);
+
+        // Compositing: a white background, a half-opaque red layer in Normal, then a Multiply layer.
+        Document doc = Document::Create(4, 3, glm::vec4(1.0f));
+        CHECK(doc.Layers.size() == 1 && doc.Layers[0].Name == "Background");
+        int red1 = doc.AddLayer("Red", 1);
+        doc.Layers[red1].Edit() = Bitmap::Solid(4, 3, Pack({ 1, 0, 0, 1 }));
+        doc.Layers[red1].Opacity = 0.5f;
+        Bitmap out = doc.Flatten();
+        CHECK(Near(Unpack(out.At(0, 0)), glm::vec4(1.0f, 0.5f, 0.5f, 1.0f), 0.01f));
+        int mul = doc.AddLayer("Mul", 2);
+        doc.Layers[mul].Edit() = Bitmap::Solid(4, 3, Pack({ 0.5f, 0.5f, 0.5f, 1 }));
+        doc.Layers[mul].Blend = LayerBlend::Multiply;
+        out = doc.Flatten();
+        CHECK(Near(Unpack(out.At(2, 1)), glm::vec4(0.5f, 0.25f, 0.25f, 1.0f), 0.01f));
+        // A blend mode over nothing (transparent below) shows the layer as it is.
+        Document clear = Document::Create(2, 2, glm::vec4(0.0f));
+        clear.Layers[0].Blend = LayerBlend::Multiply;
+        clear.Layers[0].Edit() = Bitmap::Solid(2, 2, Pack({ 0.2f, 0.4f, 0.6f, 1 }));
+        CHECK(Near(Unpack(clear.Flatten().At(1, 1)), glm::vec4(0.2f, 0.4f, 0.6f, 1.0f), 0.01f));
+        // Hidden layers do not count; a partial composite only touches its area.
+        doc.Layers[mul].Visible = false;
+        Bitmap partial = out;
+        doc.Composite(partial, Rect{ 0, 0, 0, 0 });
+        CHECK(Near(Unpack(partial.At(0, 0)), glm::vec4(1.0f, 0.5f, 0.5f, 1.0f), 0.01f));
+        CHECK(Near(Unpack(partial.At(2, 1)), glm::vec4(0.5f, 0.25f, 0.25f, 1.0f), 0.01f));
+        doc.Layers[mul].Visible = true;
+
+        // Layer operations; copies share pixels until painted.
+        int dup = doc.DuplicateLayer(red1);
+        CHECK(dup == red1 + 1 && doc.Layers[dup].Name == "Red copy" && doc.Layers[dup].Pixels == doc.Layers[red1].Pixels);
+        doc.Layers[dup].Edit().At(0, 0) = 0u;
+        CHECK(doc.Layers[dup].Pixels != doc.Layers[red1].Pixels && doc.Layers[red1].Get().At(0, 0) != 0u);
+        doc.RemoveLayer(dup);
+        doc.MoveLayer(mul, 0);
+        CHECK(doc.Layers[0].Name == "Mul" && doc.Layers[2].Name == "Red");
+        doc.MoveLayer(0, 2);
+        CHECK(doc.Layers[2].Name == "Mul");
+        doc.Layers[1].Opacity = 1.0f; // (merging into a layer at full opacity looks the same after)
+        Bitmap before = doc.Flatten();
+        int merged = doc.MergeDown(2);
+        CHECK(merged == 1 && doc.Layers.size() == 2 && doc.Layers[1].Name == "Red");
+        Bitmap after = doc.Flatten();
+        CHECK(Near(Unpack(after.At(3, 2)), Unpack(before.At(3, 2)), 0.02f));
+        CHECK(doc.UniqueLayerName("Red") == "Red 2" && doc.UniqueLayerName("Blue") == "Blue");
+
+        // The file: layers, their settings and pixels come back.
+        doc.Layers[1].Opacity = 0.5f;
+        doc.Layers[1].Blend = LayerBlend::SoftLight;
+        doc.Layers[1].LockTransparency = true;
+        doc.Export = "Textures/Out.png";
+        Document back;
+        CHECK(Document::Deserialize(doc.Serialize(), back));
+        CHECK(back.Width == 4 && back.Height == 3 && back.Layers.size() == 2 && back.Export == "Textures/Out.png");
+        CHECK(back.Layers[1].Name == "Red" && back.Layers[1].Blend == LayerBlend::SoftLight && back.Layers[1].LockTransparency);
+        CHECK(Near(back.Layers[1].Opacity, 0.5f) && back.Layers[1].Get().Pixels == doc.Layers[1].Get().Pixels);
+        CHECK(!Document::Deserialize(std::vector<uint8_t>{ 'N', 'O', 'P', 'E', 0, 0, 0, 0, 0, 0, 0, 0 }, back));
+        fs::path dir = fs::temp_directory_path() / "DimensionImageTest";
+        fs::create_directories(dir);
+        CHECK(doc.Save(dir / "Pic.dimage"));
+        Document loaded;
+        CHECK(Document::Load(dir / "Pic.dimage", loaded) && loaded.Layers.size() == 2);
+        CHECK(loaded.ExportPath(dir / "Pic.dimage") == dir / "Textures/Out.png");
+        loaded.Export.clear();
+        CHECK(loaded.ExportPath(dir / "Pic.dimage") == dir / "Pic.png");
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+
+        // A big canvas composites the same on every thread's rows.
+        Document big = Document::Create(300, 257, glm::vec4(0, 0, 1, 1));
+        int top = big.AddLayer("Top", 1);
+        Bitmap& tp = big.Layers[top].Edit();
+        for (uint32_t y = 0; y < 257; ++y)
+            for (uint32_t x = 0; x < 300; ++x) tp.At(x, y) = Pack({ x / 299.0f, y / 256.0f, 0, 1 });
+        big.Layers[top].Blend = LayerBlend::Screen;
+        Bitmap flat = big.Flatten();
+        glm::vec3 expect = BlendColors(LayerBlend::Screen, glm::vec3(0, 0, 1), glm::vec3(Unpack(tp.At(150, 200))));
+        CHECK(Near(glm::vec3(Unpack(flat.At(150, 200))), expect, 0.01f));
+        CHECK(Near(Unpack(flat.At(299, 256)), glm::vec4(1, 1, 1, 1), 0.01f));
+    }
+
+    void TestImagePainting()
+    {
+        using namespace Dimension::Imaging;
+        Document doc = Document::Create(64, 64, glm::vec4(1.0f));
+        int layer = doc.AddLayer("Paint", 1);
+        // A hard round brush: the middle covered, outside the radius untouched.
+        BrushSettings brush;
+        brush.Color = { 1, 0, 0, 1 };
+        brush.Size = 10.0f;
+        brush.Hardness = 1.0f;
+        {
+            Stroke s(doc, layer, brush);
+            s.To({ 20.0f, 20.0f });
+            Rect r = s.TakeChanged();
+            CHECK(!r.Empty() && r.X0 >= 14 && r.X1 <= 25);
+            CHECK(s.TakeChanged().Empty());
+        }
+        CHECK(Unpack(doc.Layers[layer].Get().At(20, 20)).a > 0.99f);
+        CHECK(doc.Layers[layer].Get().At(30, 20) == 0u);
+        CHECK(Near(DabWeight(brush, 0.0f), 1.0f) && DabWeight(brush, 6.0f) == 0.0f);
+        brush.Hardness = 0.0f;
+        CHECK(DabWeight(brush, 2.5f) < DabWeight(brush, 1.0f) && DabWeight(brush, 1.0f) < 1.0f);
+
+        // A line of dabs: spacing fills the way; Opacity caps a stroke that goes over itself.
+        brush.Hardness = 1.0f;
+        brush.Opacity = 0.5f;
+        brush.Color = { 0, 0, 1, 1 };
+        {
+            Stroke s(doc, layer, brush);
+            s.To({ 5.0f, 50.0f });
+            s.To({ 55.0f, 50.0f });
+            s.To({ 5.0f, 50.0f }); // back over it
+        }
+        for (uint32_t x : { 5u, 17u, 30u, 43u, 55u }) CHECK(Near(Unpack(doc.Layers[layer].Get().At(x, 50)).a, 0.5f, 0.01f));
+        // Low flow builds up within a stroke as it passes again.
+        brush.Opacity = 1.0f;
+        brush.Flow = 0.3f;
+        float once = 0.0f, twice = 0.0f;
+        {
+            Stroke s(doc, layer, brush);
+            s.To({ 32.0f, 8.0f });
+            once = Unpack(doc.Layers[layer].Get().At(32, 8)).a;
+            s.To({ 32.0f, 20.0f });
+            s.To({ 32.0f, 8.0f }); // (back over it)
+            twice = Unpack(doc.Layers[layer].Get().At(32, 8)).a;
+        }
+        CHECK(Near(once, 0.3f, 0.02f) && twice > once + 0.1f);
+
+        // The eraser takes alpha; Lock Transparency keeps it.
+        brush.Flow = 1.0f;
+        brush.Erase = true;
+        {
+            Stroke s(doc, layer, brush);
+            s.To({ 20.0f, 20.0f });
+        }
+        CHECK(doc.Layers[layer].Get().At(20, 20) >> 24 == 0);
+        brush.Erase = false;
+        brush.Color = { 0, 1, 0, 1 };
+        doc.Layers[layer].LockTransparency = true;
+        {
+            Stroke s(doc, layer, brush);
+            s.To({ 20.0f, 20.0f });
+            s.To({ 17.0f, 50.0f });
+        }
+        CHECK(doc.Layers[layer].Get().At(20, 20) >> 24 == 0);                       // (stayed clear)
+        glm::vec4 kept = Unpack(doc.Layers[layer].Get().At(17, 50));
+        CHECK(Near(kept.a, 0.5f, 0.01f) && kept.g > 0.9f);                          // (recolored, alpha kept)
+        doc.Layers[layer].LockTransparency = false;
+
+        // The pencil: exact pixels, no soft edge.
+        BrushSettings pencil;
+        pencil.Aliased = true;
+        pencil.Size = 1.0f;
+        pencil.Color = { 0, 0, 0, 1 };
+        int px = doc.AddLayer("Pixels", 2);
+        {
+            Stroke s(doc, px, pencil);
+            s.To({ 2.3f, 2.7f });
+            s.To({ 9.6f, 2.2f });
+        }
+        int count = 0;
+        for (uint32_t c : doc.Layers[px].Get().Pixels)
+        {
+            CHECK((c >> 24) == 0 || (c >> 24) == 255);
+            count += (c >> 24) == 255;
+        }
+        CHECK(count == 8 && doc.Layers[px].Get().At(2, 2) >> 24 == 255 && doc.Layers[px].Get().At(9, 2) >> 24 == 255);
+
+        // The paint bucket: contiguous stops at a wall; global reaches the other side; tolerance.
+        Document fill = Document::Create(10, 10, glm::vec4(1.0f));
+        Bitmap& f = fill.Layers[0].Edit();
+        for (uint32_t y = 0; y < 10; ++y) f.At(5, y) = Pack({ 0, 0, 0, 1 });
+        f.At(1, 1) = Pack({ 0.95f, 0.95f, 0.95f, 1 });
+        FillSettings fs;
+        fs.Color = { 1, 0, 0, 1 };
+        fs.Tolerance = 0.0f;
+        Rect r = Fill(fill, 0, { 0, 0 }, fs);
+        CHECK(r.X1 == 4 && Unpack(f.At(1, 1)).r < 1.0f && Unpack(fill.Layers[0].Get().At(1, 1)).g > 0.9f); // (1,1) differs a little
+        CHECK(Unpack(fill.Layers[0].Get().At(4, 9)) == glm::vec4(1, 0, 0, 1) && Unpack(fill.Layers[0].Get().At(7, 3)) == glm::vec4(1));
+        Document fill2 = Document::Create(10, 10, glm::vec4(1.0f));
+        Bitmap& g = fill2.Layers[0].Edit();
+        for (uint32_t y = 0; y < 10; ++y) g.At(5, y) = Pack({ 0, 0, 0, 1 });
+        g.At(1, 1) = Pack({ 0.95f, 0.95f, 0.95f, 1 });
+        fs.Tolerance = 32.0f;
+        fs.Contiguous = false;
+        Fill(fill2, 0, { 0, 0 }, fs);
+        CHECK(Unpack(fill2.Layers[0].Get().At(7, 3)) == glm::vec4(1, 0, 0, 1) && Unpack(fill2.Layers[0].Get().At(1, 1)) == glm::vec4(1, 0, 0, 1));
+        CHECK(Unpack(fill2.Layers[0].Get().At(5, 5)) == glm::vec4(0, 0, 0, 1));
+        // Sample All Layers: an empty layer filled where the picture below is one color.
+        int empty = fill2.AddLayer("Empty", 1);
+        fs.Contiguous = true;
+        fs.SampleAllLayers = true;
+        fs.Color = { 0, 0, 1, 1 };
+        Fill(fill2, empty, { 0, 0 }, fs);
+        CHECK(Unpack(fill2.Layers[empty].Get().At(2, 2)).b > 0.99f && fill2.Layers[empty].Get().At(7, 2) == 0u);
+
+        // The eyedropper averages straight colors (transparent pixels do not darken them).
+        Bitmap pick = Bitmap::Solid(3, 3, 0u);
+        pick.At(1, 1) = Pack({ 1, 0, 0, 1 });
+        glm::vec4 c = SampleColor(pick, { 1, 1 }, 1);
+        CHECK(Near(glm::vec3(c), glm::vec3(1, 0, 0), 0.01f) && Near(c.a, 1.0f / 9.0f, 0.01f));
+        CHECK(Near(SampleColor(pick, { 1, 1 }), glm::vec4(1, 0, 0, 1), 0.01f));
+    }
+
+    void TestImageGroupsAndMasks()
+    {
+        using namespace Dimension::Imaging;
+        const glm::vec4 white(1.0f), red(1, 0, 0, 1), blue(0, 0, 1, 1);
+        Document doc = Document::Create(8, 8, white);
+        int a = doc.AddLayer("A", 1);
+        doc.Layers[(size_t)a].Edit() = Bitmap::Solid(8, 8, Pack(red));
+        CHECK(doc.Layers[0].Id != 0 && doc.Layers[(size_t)a].Id != doc.Layers[0].Id);
+        // A group around A (Pass Through): the picture does not change; its opacity fades what is inside.
+        int g = doc.GroupLayer(a);
+        CHECK(g == 2 && doc.Layers[(size_t)g].IsGroup() && doc.Layers[(size_t)g].Blend == LayerBlend::PassThrough);
+        CHECK(doc.Layers[1].Parent == doc.Layers[(size_t)g].Id && doc.Depth(1) == 1 && doc.IsInside(1, doc.Layers[(size_t)g].Id));
+        CHECK(Near(Unpack(doc.Flatten().At(3, 3)), red, 0.01f));
+        doc.Layers[(size_t)g].Opacity = 0.5f;
+        CHECK(Near(Unpack(doc.Flatten().At(3, 3)), glm::vec4(1, 0.5f, 0.5f, 1), 0.01f));
+        // A hidden group hides its contents.
+        doc.Layers[(size_t)g].Visible = false;
+        CHECK(Near(Unpack(doc.Flatten().At(3, 3)), white, 0.01f) && !doc.ShownInTree(1));
+        doc.Layers[(size_t)g].Visible = true;
+        doc.Layers[(size_t)g].Opacity = 1.0f;
+        // An isolated group (Normal) with a Multiply layer inside: it multiplies only what is in the group.
+        int b = doc.AddLayer("B", 2, doc.Layers[(size_t)g].Id); // (above A, in the group)
+        g = doc.IndexOf(doc.Layers[(size_t)b].Parent);
+        doc.Layers[(size_t)b].Edit() = Bitmap::Solid(8, 8, Pack(glm::vec4(0.5f, 0.5f, 0.5f, 1)));
+        doc.Layers[(size_t)b].Blend = LayerBlend::Multiply;
+        CHECK(doc.Children(doc.Layers[(size_t)g].Id).size() == 2);
+        CHECK(Near(Unpack(doc.Flatten().At(1, 1)), glm::vec4(0.5f, 0, 0, 1), 0.01f));
+        Bitmap alone = doc.Render(g);
+        CHECK(Near(Unpack(alone.At(1, 1)), glm::vec4(0.5f, 0, 0, 1), 0.01f));
+        // Pass Through lets the Multiply reach the background too; Normal keeps it inside (here the same: A is opaque).
+        doc.Layers[(size_t)a].Edit().At(0, 0) = 0u; // (a hole in A)
+        doc.Layers[(size_t)g].Blend = LayerBlend::Normal;
+        CHECK(Near(Unpack(doc.Flatten().At(0, 0)), glm::vec4(0.5f, 0.5f, 0.5f, 1), 0.01f)); // (grey over white, inside the group)
+        doc.Layers[(size_t)g].Blend = LayerBlend::PassThrough;
+        CHECK(Near(Unpack(doc.Flatten().At(0, 0)), glm::vec4(0.5f, 0.5f, 0.5f, 1), 0.01f)); // (white x grey)
+
+        // Masks: black hides, white shows; disabled masks do nothing; applying bakes the mask into alpha.
+        doc.AddMask(a, true);
+        CHECK(doc.Layers[(size_t)a].HasMask() && doc.Layers[(size_t)a].LayerMask->At(2, 2) == 255);
+        doc.Layers[(size_t)b].Visible = false;
+        doc.Layers[(size_t)a].EditMask().Values[(size_t)2 * 8 + 2] = 0;
+        Bitmap flat = doc.Flatten();
+        CHECK(Near(Unpack(flat.At(2, 2)), white, 0.01f) && Near(Unpack(flat.At(3, 2)), red, 0.01f));
+        doc.Layers[(size_t)a].MaskEnabled = false;
+        CHECK(Near(Unpack(doc.Flatten().At(2, 2)), red, 0.01f));
+        doc.Layers[(size_t)a].MaskEnabled = true;
+        doc.InvertMask(a);
+        CHECK(doc.Layers[(size_t)a].LayerMask->At(2, 2) == 255 && doc.Layers[(size_t)a].LayerMask->At(3, 2) == 0);
+        doc.InvertMask(a);
+        Document masked = doc;
+        doc.ApplyMask(a);
+        CHECK(!doc.Layers[(size_t)a].HasMask() && (doc.Layers[(size_t)a].Get().At(2, 2) >> 24) == 0 && (doc.Layers[(size_t)a].Get().At(3, 2) >> 24) == 255);
+        CHECK(Near(Unpack(doc.Flatten().At(2, 2)), white, 0.01f));
+        // (the copy kept its own mask: masks are shared until edited)
+        CHECK(masked.Layers[(size_t)a].HasMask() && masked.Layers[(size_t)a].LayerMask->At(2, 2) == 0);
+        // A mask on a group masks everything in it.
+        doc.AddMask(g, false);
+        CHECK(Near(Unpack(doc.Flatten().At(5, 5)), white, 0.01f));
+        doc.RemoveMask(g);
+
+        // The file keeps groups, masks, locks and ids.
+        masked.Layers[(size_t)a].LockPixels = true;
+        masked.Layers[(size_t)g].Expanded = false;
+        Document back;
+        CHECK(Document::Deserialize(masked.Serialize(), back));
+        CHECK(back.Layers.size() == masked.Layers.size() && back.NextId == masked.NextId);
+        for (size_t i = 0; i < back.Layers.size(); ++i)
+            CHECK(back.Layers[i].Id == masked.Layers[i].Id && back.Layers[i].Parent == masked.Layers[i].Parent && back.Layers[i].Kind == masked.Layers[i].Kind);
+        CHECK(back.Layers[(size_t)a].HasMask() && back.Layers[(size_t)a].LayerMask->Values == masked.Layers[(size_t)a].LayerMask->Values);
+        CHECK(back.Layers[(size_t)a].LockPixels && !back.Layers[(size_t)a].CanPaint() && !back.Layers[(size_t)g].Expanded);
+        CHECK(back.Layers[(size_t)g].Blend == LayerBlend::PassThrough && !back.Layers[(size_t)g].Pixels);
+        CHECK(back.Flatten().Pixels == masked.Flatten().Pixels);
+        Document header;
+        CHECK(Document::Deserialize(masked.Serialize(), header, false) && header.Layers.size() == masked.Layers.size());
+
+        // Moving: into a group, out of it, steps among siblings; a group cannot go inside itself.
+        Document tree = Document::Create(4, 4, white);
+        int l1 = tree.AddLayer("L1", 1), l2 = tree.AddLayer("L2", 2);
+        int grp = tree.GroupLayer(l2); // [bg, L1, L2, G] with L2 in G
+        uint32_t gid = tree.Layers[(size_t)grp].Id;
+        int moved = tree.MoveInto(l1, gid, -1); // L1 to the bottom of G
+        CHECK(moved >= 0 && tree.Layers[(size_t)moved].Parent == gid);
+        std::vector<int> kids = tree.Children(gid);
+        CHECK(kids.size() == 2 && tree.Layers[(size_t)kids[0]].Name == "L1" && tree.Layers[(size_t)kids[1]].Name == "L2");
+        int stepped = tree.Step(tree.IndexOf(tree.Layers[(size_t)kids[0]].Id), +1);
+        kids = tree.Children(gid);
+        CHECK(tree.Layers[(size_t)kids[1]].Name == "L1" && stepped == kids[1]);
+        CHECK(tree.MoveInto(tree.IndexOf(gid), gid, -1) == -1);
+        int inner = tree.GroupLayer(kids[0]); // a group in the group
+        CHECK(tree.MoveInto(tree.IndexOf(gid), tree.Layers[(size_t)inner].Id, -1) == -1);
+        CHECK(tree.Depth(tree.IndexOf(tree.Layers[(size_t)inner].Id)) == 1);
+        // Duplicating a group copies its contents with new ids; removing it removes them.
+        size_t before = tree.Layers.size();
+        int copy = tree.DuplicateLayer(tree.IndexOf(gid));
+        CHECK(tree.Layers.size() == before * 2 - 1 && tree.Layers[(size_t)copy].Id != gid);
+        CHECK(tree.Children(tree.Layers[(size_t)copy].Id).size() == 2);
+        tree.RemoveLayer(copy);
+        CHECK(tree.Layers.size() == before);
+        // Ungrouping puts the contents where the group was; merging a group makes one layer of it.
+        int top = tree.Ungroup(tree.IndexOf(tree.Layers[(size_t)inner].Id));
+        CHECK(top >= 0 && tree.Layers[(size_t)top].Parent == gid && tree.Children(gid).size() == 2);
+        tree.Layers[(size_t)tree.Children(gid)[0]].Edit() = Bitmap::Solid(4, 4, Pack(blue));
+        Bitmap expect = tree.Flatten();
+        int merged = tree.MergeGroup(tree.IndexOf(gid));
+        CHECK(merged >= 0 && !tree.Layers[(size_t)merged].IsGroup() && tree.Layers.size() == 2);
+        CHECK(tree.Flatten().Pixels == expect.Pixels);
+        CHECK(tree.UniqueLayerName("Layer 1") == "Layer 1");
+        tree.Layers[0].Name = "Layer 1";
+        CHECK(tree.UniqueLayerName("Layer 1") == "Layer 2");
+    }
+
+    void TestImageTools()
+    {
+        using namespace Dimension::Imaging;
+        // Tip shape: a flat tip reaches further along its angle than across it.
+        BrushSettings tip;
+        tip.Size = 20.0f;
+        tip.Hardness = 1.0f;
+        tip.Roundness = 0.25f;
+        CHECK(DabWeight(tip, glm::vec2(8.0f, 0.0f)) > 0.9f && DabWeight(tip, glm::vec2(0.0f, 8.0f)) == 0.0f);
+        tip.Angle = 90.0f;
+        CHECK(DabWeight(tip, glm::vec2(8.0f, 0.0f)) == 0.0f && DabWeight(tip, glm::vec2(0.0f, 8.0f)) > 0.9f);
+
+        // Painting a mask with gray; a stroke on a mask leaves the pixels alone.
+        Document doc = Document::Create(32, 32, glm::vec4(1, 0, 0, 1));
+        doc.AddMask(0, true);
+        BrushSettings brush;
+        brush.Size = 6.0f;
+        brush.Hardness = 1.0f;
+        brush.Color = { 0, 0, 0, 1 };
+        {
+            Stroke s(doc, 0, brush, true);
+            s.To({ 10.0f, 10.0f });
+        }
+        CHECK(doc.Layers[0].LayerMask->At(10, 10) == 0 && doc.Layers[0].LayerMask->At(20, 20) == 255);
+        CHECK(doc.Layers[0].Get().At(10, 10) == Pack({ 1, 0, 0, 1 }));
+        CHECK((doc.Flatten().At(10, 10) >> 24) == 0);
+
+        // Clone: the source's colors, offset.
+        Document pic = Document::Create(32, 32, glm::vec4(1.0f));
+        Bitmap& px = pic.Layers[0].Edit();
+        for (uint32_t y = 0; y < 32; ++y)
+            for (uint32_t x = 0; x < 8; ++x) px.At(x, y) = Pack({ 0, 0, 1, 1 }); // a blue strip on the left
+        Bitmap source = pic.Flatten();
+        BrushSettings clone = brush;
+        clone.Tool = BrushTool::Clone;
+        clone.Source = &source;
+        clone.SourceOffset = { -20.0f, 0.0f };
+        {
+            Stroke s(pic, 0, clone);
+            s.To({ 24.0f, 16.0f });
+        }
+        CHECK(pic.Layers[0].Get().At(24, 16) == Pack({ 0, 0, 1, 1 }) && pic.Layers[0].Get().At(24, 4) == Pack(glm::vec4(1.0f)));
+
+        // Heal: the source's detail with the destination's own color (a dark dot on grey, healed from plain grey).
+        Document skin = Document::Create(64, 64, glm::vec4(0.6f, 0.4f, 0.3f, 1));
+        Bitmap& sk = skin.Layers[0].Edit();
+        for (uint32_t y = 0; y < 64; ++y)
+            for (uint32_t x = 32; x < 64; ++x) sk.At(x, y) = Pack({ 0.3f, 0.5f, 0.6f, 1 }); // the right half another color
+        sk.At(48, 32) = Pack({ 0.1f, 0.1f, 0.1f, 1 }); // a blemish
+        Bitmap skinSource = skin.Flatten();
+        BrushSettings heal = brush;
+        heal.Tool = BrushTool::Heal;
+        heal.Size = 8.0f;
+        heal.Source = &skinSource;
+        heal.SourceOffset = { -32.0f, 0.0f }; // (from the left half: another color)
+        {
+            Stroke s(skin, 0, heal);
+            s.To({ 48.5f, 32.5f });
+        }
+        glm::vec4 healed = Unpack(skin.Layers[0].Get().At(48, 32));
+        CHECK(Near(glm::vec3(healed), glm::vec3(0.3f, 0.5f, 0.6f), 0.06f)); // (the right half's color, the blemish gone)
+
+        // Blur softens an edge; Sharpen steepens it; Smudge drags a color along.
+        auto edgeDoc = [] {
+            Document d = Document::Create(32, 32, glm::vec4(1.0f));
+            Bitmap& b = d.Layers[0].Edit();
+            for (uint32_t y = 0; y < 32; ++y)
+                for (uint32_t x = 0; x < 16; ++x) b.At(x, y) = Pack({ 0, 0, 0, 1 });
+            return d;
+        };
+        Document blur = edgeDoc();
+        BrushSettings soft = brush;
+        soft.Tool = BrushTool::Blur;
+        soft.Size = 10.0f;
+        {
+            Stroke s(blur, 0, soft);
+            s.To({ 16.0f, 16.0f });
+            s.To({ 16.0f, 17.0f });
+            s.To({ 16.0f, 16.0f });
+        }
+        float l15 = Unpack(blur.Layers[0].Get().At(15, 16)).r, l16 = Unpack(blur.Layers[0].Get().At(16, 16)).r;
+        CHECK(l15 > 0.05f && l16 < 0.95f);
+        Document sharp = Document::Create(32, 32, glm::vec4(0.5f, 0.5f, 0.5f, 1));
+        sharp.Layers[0].Edit().At(16, 16) = Pack({ 0.6f, 0.6f, 0.6f, 1 });
+        BrushSettings crisp = soft;
+        crisp.Tool = BrushTool::Sharpen;
+        {
+            Stroke s(sharp, 0, crisp);
+            s.To({ 16.5f, 16.5f });
+        }
+        CHECK(Unpack(sharp.Layers[0].Get().At(16, 16)).r > 0.6f && Unpack(sharp.Layers[0].Get().At(15, 16)).r < 0.5f);
+        Document smudge = edgeDoc();
+        BrushSettings drag = soft;
+        drag.Tool = BrushTool::Smudge;
+        drag.Opacity = 0.8f;
+        {
+            Stroke s(smudge, 0, drag);
+            s.To({ 12.0f, 16.0f });
+            s.To({ 22.0f, 16.0f });
+        }
+        CHECK(Unpack(smudge.Layers[0].Get().At(20, 16)).r < 0.9f && Unpack(smudge.Layers[0].Get().At(20, 2)).r > 0.99f);
+
+        // Dodge lightens, Burn darkens, Sponge desaturates; alpha stays.
+        auto toned = [&](BrushTool t, bool saturate) {
+            Document d = Document::Create(16, 16, glm::vec4(0.5f, 0.3f, 0.2f, 1));
+            BrushSettings bt = brush;
+            bt.Tool = t;
+            bt.Size = 8.0f;
+            bt.Opacity = 0.5f;
+            bt.Saturate = saturate;
+            {
+                Stroke s(d, 0, bt);
+                s.To({ 8.0f, 8.0f });
+            }
+            return Unpack(d.Layers[0].Get().At(8, 8));
+        };
+        glm::vec4 dodged = toned(BrushTool::Dodge, false), burned = toned(BrushTool::Burn, false), grey = toned(BrushTool::Sponge, false);
+        glm::vec4 vivid = toned(BrushTool::Sponge, true);
+        CHECK(dodged.r > 0.55f && burned.r < 0.45f && Near(dodged.a, 1.0f));
+        CHECK(grey.r - grey.b < 0.3f - 0.05f && vivid.r - vivid.b > 0.3f + 0.05f);
+
+        // Gradients: linear ends at its colors, radial from the center, reversed swaps; to transparent keeps the color.
+        Document grad = Document::Create(101, 11, glm::vec4(0.0f));
+        GradientSettings gs;
+        gs.From = { 0, 0, 0, 1 };
+        gs.To = { 1, 1, 1, 1 };
+        gs.Dither = false;
+        Rect r = DrawGradient(grad, 0, { 0.5f, 5.5f }, { 100.5f, 5.5f }, gs);
+        CHECK(!r.Empty());
+        CHECK(Unpack(grad.Layers[0].Get().At(0, 5)).r < 0.02f && Unpack(grad.Layers[0].Get().At(100, 5)).r > 0.98f);
+        CHECK(Near(Unpack(grad.Layers[0].Get().At(50, 5)).r, 0.5f, 0.02f));
+        CHECK(Near(GradientAt(GradientShape::Radial, { 0, 0 }, { 10, 0 }, { 0, 5 }), 0.5f));
+        CHECK(Near(GradientAt(GradientShape::Reflected, { 0, 0 }, { 10, 0 }, { -5, 0 }), 0.5f));
+        CHECK(Near(GradientAt(GradientShape::Diamond, { 0, 0 }, { 10, 0 }, { 3, 2 }), 0.5f));
+        CHECK(Near(GradientAt(GradientShape::Angle, { 0, 0 }, { 10, 0 }, { 0, -10 }), 0.25f) || Near(GradientAt(GradientShape::Angle, { 0, 0 }, { 10, 0 }, { 0, -10 }), 0.75f));
+        Document fade = Document::Create(11, 3, glm::vec4(0.0f));
+        gs.From = { 1, 0, 0, 1 };
+        gs.To = { 1, 0, 0, 0 };
+        gs.Reverse = true;
+        DrawGradient(fade, 0, { 0.5f, 1.5f }, { 10.5f, 1.5f }, gs);
+        glm::vec4 mid = Unpack(fade.Layers[0].Get().At(5, 1));
+        CHECK(Near(mid.a, 0.5f, 0.03f) && mid.r > 0.98f && (fade.Layers[0].Get().At(0, 1) >> 24) < 3);
+        // On a mask: by gray.
+        fade.AddMask(0, true);
+        gs.Reverse = false;
+        gs.From = { 0, 0, 0, 1 };
+        gs.To = { 1, 1, 1, 1 };
+        DrawGradient(fade, 0, { 0.5f, 1.5f }, { 10.5f, 1.5f }, gs, true);
+        CHECK(fade.Layers[0].LayerMask->At(0, 1) < 10 && fade.Layers[0].LayerMask->At(10, 1) > 245);
+
+        // Locked layers: a group cannot be painted; Lock Pixels says so (the editor refuses before a stroke).
+        Document locked = Document::Create(4, 4, glm::vec4(1.0f));
+        locked.Layers[0].LockPixels = true;
+        CHECK(!locked.Layers[0].CanPaint());
+        int gg = locked.GroupLayer(0);
+        CHECK(!locked.Layers[(size_t)gg].CanPaint());
+    }
+
+    void TestImageSelections()
+    {
+        using namespace Dimension::Imaging;
+        // A rectangle: whole pixels inside; antialiased edges partly covered.
+        Mask r = SelectRect(20, 20, { 2, 3 }, { 8, 9 }, false, false);
+        CHECK(r.At(2, 3) == 255 && r.At(7, 8) == 255 && r.At(8, 8) == 0 && r.At(1, 3) == 0);
+        Rect b = Bounds(r);
+        CHECK(b.X0 == 2 && b.Y0 == 3 && b.X1 == 7 && b.Y1 == 8);
+        Mask soft = SelectRect(20, 20, { 2.5f, 3.0f }, { 8.0f, 9.0f }, false, true);
+        CHECK(soft.At(2, 5) > 100 && soft.At(2, 5) < 155 && soft.At(3, 5) == 255);
+        // An ellipse: the middle in, the corners out.
+        Mask e = SelectRect(40, 40, { 0, 0 }, { 40, 40 }, true, true);
+        CHECK(e.At(20, 20) == 255 && e.At(1, 1) == 0 && e.At(20, 1) > 0);
+        // A triangle (lasso).
+        Mask tri = SelectPolygon(30, 30, { { 0, 0 }, { 30, 0 }, { 0, 30 } }, false);
+        CHECK(tri.At(5, 5) == 255 && tri.At(25, 25) == 0);
+        // Combining.
+        Mask sel = SelectRect(20, 20, { 0, 0 }, { 10, 20 }, false, false);
+        Combine(sel, SelectRect(20, 20, { 5, 0 }, { 15, 20 }, false, false), SelectOp::Add);
+        CHECK(sel.At(12, 5) == 255 && sel.At(17, 5) == 0);
+        Combine(sel, SelectRect(20, 20, { 0, 0 }, { 4, 20 }, false, false), SelectOp::Subtract);
+        CHECK(sel.At(2, 5) == 0 && sel.At(6, 5) == 255);
+        Combine(sel, SelectRect(20, 20, { 0, 0 }, { 20, 10 }, false, false), SelectOp::Intersect);
+        CHECK(sel.At(6, 5) == 255 && sel.At(6, 15) == 0);
+        InvertSelection(sel);
+        CHECK(sel.At(6, 5) == 0 && sel.At(6, 15) == 255);
+        // Expand, contract, feather, border.
+        Mask dot = SelectRect(21, 21, { 10, 10 }, { 11, 11 }, false, false);
+        Expand(dot, 3);
+        CHECK(dot.At(7, 7) == 255 && dot.At(6, 10) == 0 && dot.At(13, 13) == 255);
+        Expand(dot, -2);
+        CHECK(dot.At(9, 9) == 255 && dot.At(8, 10) == 0);
+        Mask block = SelectRect(60, 60, { 10, 10 }, { 50, 50 }, false, false);
+        Feather(block, 6.0f);
+        CHECK(block.At(30, 30) == 255 && block.At(10, 30) > 60 && block.At(10, 30) < 200 && block.At(0, 30) < 10);
+        Mask ring = Border(SelectRect(40, 40, { 10, 10 }, { 30, 30 }, false, false), 4);
+        CHECK(ring.At(20, 20) == 0 && ring.At(10, 20) == 255 && ring.At(2, 20) == 0);
+        CHECK(IsEmpty(Mask::Solid(4, 4, 0)) && !IsEmpty(ring));
+        // The outline of a rectangle: four runs.
+        std::vector<Segment> outline = Outline(SelectRect(10, 10, { 2, 2 }, { 6, 5 }, false, false));
+        CHECK(outline.size() == 4);
+        // The magic wand and color range.
+        Bitmap pic = Bitmap::Solid(10, 10, Pack({ 1, 1, 1, 1 }));
+        for (uint32_t y = 0; y < 10; ++y) pic.At(5, y) = Pack({ 0, 0, 0, 1 });
+        Mask wand = SelectColor(pic, { 0, 0 }, 10.0f, true);
+        CHECK(wand.At(4, 9) == 255 && wand.At(5, 0) == 0 && wand.At(7, 0) == 0);
+        Mask range = SelectColorRange(pic, { 0, 0, 0, 1 }, 40.0f);
+        CHECK(range.At(5, 3) == 255 && range.At(0, 0) == 0);
+        Bitmap half = Bitmap::Solid(4, 4, 0u);
+        half.At(1, 1) = Pack({ 1, 0, 0, 0.5f });
+        CHECK(std::abs((int)SelectAlpha(half).At(1, 1) - 128) <= 1 && SelectAlpha(half).At(0, 0) == 0);
+
+        // Painting only where selected.
+        Document doc = Document::Create(20, 20, glm::vec4(1.0f));
+        Mask left = SelectRect(20, 20, { 0, 0 }, { 10, 20 }, false, false);
+        BrushSettings brush;
+        brush.Size = 40.0f;
+        brush.Hardness = 1.0f;
+        brush.Color = { 1, 0, 0, 1 };
+        brush.Selection = &left;
+        {
+            Stroke s(doc, 0, brush);
+            s.To({ 10.0f, 10.0f });
+        }
+        CHECK(doc.Layers[0].Get().At(3, 3) == Pack({ 1, 0, 0, 1 }) && doc.Layers[0].Get().At(15, 3) == Pack(glm::vec4(1.0f)));
+        FillSettings fill;
+        fill.Color = { 0, 0, 1, 1 };
+        fill.Tolerance = 255.0f;
+        fill.Selection = &left;
+        Fill(doc, 0, { 15, 15 }, fill);
+        CHECK(doc.Layers[0].Get().At(3, 3) == Pack({ 0, 0, 1, 1 }) && doc.Layers[0].Get().At(15, 3) == Pack(glm::vec4(1.0f)));
+        GradientSettings grad;
+        grad.Dither = false;
+        grad.Selection = &left;
+        DrawGradient(doc, 0, { 0, 0 }, { 20, 0 }, grad);
+        CHECK(doc.Layers[0].Get().At(15, 3) == Pack(glm::vec4(1.0f)) && Unpack(doc.Layers[0].Get().At(1, 3)).r < 0.1f);
+        Rect filled = FillSelection(doc, 0, { 0, 1, 0, 1 }, &left, false);
+        CHECK(filled.X1 == 9 && doc.Layers[0].Get().At(9, 0) == Pack({ 0, 1, 0, 1 }));
+
+        // Copy, clear and paste.
+        Rect bounds;
+        Bitmap copied = CopyPixels(doc.Layers[0].Get(), &left, bounds);
+        CHECK(copied.Width == 10 && copied.Height == 20 && bounds.X0 == 0 && bounds.X1 == 9);
+        Rect cleared = ClearPixels(doc.Layers[0].Edit(), &left);
+        CHECK(!cleared.Empty() && (doc.Layers[0].Get().At(3, 3) >> 24) == 0 && (doc.Layers[0].Get().At(15, 3) >> 24) == 255);
+        Bitmap target = Bitmap::Solid(20, 20, 0u);
+        Blit(target, copied, { 10, 0 });
+        CHECK(target.At(13, 3) == Pack({ 0, 1, 0, 1 }) && target.At(3, 3) == 0u);
+        Mask m = Mask::Solid(20, 20, 255);
+        FillMask(m, &left, 0);
+        CHECK(m.At(3, 3) == 0 && m.At(15, 3) == 255);
+    }
+
+    void TestImageTransforms()
+    {
+        using namespace Dimension::Imaging;
+        // The homography of four points; a translation; a quarter turn.
+        glm::vec2 from[4] = { { 0, 0 }, { 10, 0 }, { 10, 10 }, { 0, 10 } };
+        glm::vec2 to[4] = { { 5, 5 }, { 15, 5 }, { 15, 15 }, { 5, 15 } };
+        glm::mat3 shift = Homography(from, to);
+        CHECK(Near(Apply(shift, { 3, 4 }), glm::vec2(8, 9)));
+        glm::vec2 persp[4] = { { 0, 0 }, { 20, 2 }, { 18, 12 }, { 1, 9 } };
+        glm::mat3 h = Homography(from, persp);
+        for (int i = 0; i < 4; ++i) CHECK(Near(Apply(h, from[i]), persp[i], 1e-3f));
+
+        Bitmap img = Bitmap::Solid(16, 16, 0u);
+        img.At(2, 3) = Pack({ 1, 0, 0, 1 });
+        img.At(3, 3) = Pack({ 0, 1, 0, 1 });
+        // Moved by whole pixels: exact.
+        glm::mat3 move(1.0f);
+        move[2] = glm::vec3(5, 2, 1);
+        Bitmap moved = TransformPixels(img, move, nullptr, Resample::Bilinear);
+        CHECK(moved.At(7, 5) == img.At(2, 3) && moved.At(8, 5) == img.At(3, 3) && moved.At(2, 3) == 0u);
+        // Only the selected pixel moves; the other stays.
+        Mask one = SelectRect(16, 16, { 2, 3 }, { 3, 4 }, false, false);
+        Bitmap part = TransformPixels(img, move, &one, Resample::Nearest);
+        CHECK(part.At(7, 5) == img.At(2, 3) && part.At(3, 3) == img.At(3, 3) && part.At(2, 3) == 0u);
+        // Scaled up 2x about the origin (nearest): a pixel becomes 2x2.
+        glm::mat3 scale(1.0f);
+        scale[0][0] = scale[1][1] = 2.0f;
+        Bitmap big = TransformPixels(img, scale, nullptr, Resample::Nearest);
+        CHECK(big.At(4, 6) == img.At(2, 3) && big.At(5, 7) == img.At(2, 3) && big.At(6, 6) == img.At(3, 3));
+        // A mask carries along, `outside` where nothing lands.
+        Mask mm = Mask::Solid(16, 16, 0);
+        mm.Values[(size_t)3 * 16 + 2] = 200;
+        Mask mt = TransformMask(mm, move, 255, Resample::Bilinear);
+        CHECK(mt.At(7, 5) == 200 && mt.At(0, 0) == 255 && mt.At(10, 10) == 0);
+
+        // Resampling: halving averages 2x2 blocks; nearest keeps hard pixels.
+        Bitmap checker = Bitmap::Solid(8, 8, 0u);
+        for (uint32_t y = 0; y < 8; ++y)
+            for (uint32_t x = 0; x < 8; ++x) checker.At(x, y) = ((x + y) & 1) ? Pack({ 1, 1, 1, 1 }) : Pack({ 0, 0, 0, 1 });
+        Bitmap halfSize = ResampleBitmap(checker, 4, 4, Resample::Bilinear);
+        CHECK(Near(Unpack(halfSize.At(1, 1)).r, 0.5f, 0.05f));
+        Bitmap twice = ResampleBitmap(checker, 16, 16, Resample::Nearest);
+        CHECK(twice.At(0, 0) == checker.At(0, 0) && twice.At(1, 1) == checker.At(0, 0) && twice.At(2, 0) == checker.At(1, 0));
+
+        // The canvas: crop, extend, rotate, flip, resize (layers, masks and the selection together).
+        Document doc = Document::Create(6, 4, glm::vec4(0.0f));
+        doc.Layers[0].Edit().At(1, 0) = Pack({ 1, 0, 0, 1 });
+        doc.AddMask(0, true);
+        doc.Selection = std::make_shared<Mask>(SelectRect(6, 4, { 1, 0 }, { 2, 1 }, false, false));
+        RotateCanvas(doc, 1); // clockwise: (1, 0) -> (H-1-0, 1) = (3, 1)
+        CHECK(doc.Width == 4 && doc.Height == 6 && doc.Layers[0].Get().At(3, 1) == Pack({ 1, 0, 0, 1 }));
+        CHECK(doc.Selection->At(3, 1) == 255 && doc.Layers[0].LayerMask->Width == 4);
+        RotateCanvas(doc, -1);
+        CHECK(doc.Width == 6 && doc.Layers[0].Get().At(1, 0) == Pack({ 1, 0, 0, 1 }));
+        FlipCanvas(doc, true);
+        CHECK(doc.Layers[0].Get().At(4, 0) == Pack({ 1, 0, 0, 1 }));
+        FlipCanvas(doc, false);
+        CHECK(doc.Layers[0].Get().At(4, 3) == Pack({ 1, 0, 0, 1 }));
+        Reframe(doc, 10, 10, { 2, 3 });
+        CHECK(doc.Width == 10 && doc.Layers[0].Get().At(6, 6) == Pack({ 1, 0, 0, 1 }) && doc.Layers[0].LayerMask->At(0, 0) == 255);
+        Reframe(doc, 3, 3, { -5, -5 }); // crop to (5..7, 5..7)
+        CHECK(doc.Width == 3 && doc.Height == 3 && doc.Layers[0].Get().At(1, 1) == Pack({ 1, 0, 0, 1 }));
+        ResizeImage(doc, 6, 6, Resample::Nearest);
+        CHECK(doc.Width == 6 && doc.Layers[0].Get().At(2, 2) == Pack({ 1, 0, 0, 1 }) && doc.Layers[0].Get().At(3, 3) == Pack({ 1, 0, 0, 1 }));
+        CHECK(doc.Selection->Width == 6 && doc.Layers[0].LayerMask->Width == 6);
+        // The selection is kept in copies (undo) but not in the file.
+        Document back;
+        CHECK(Document::Deserialize(doc.Serialize(), back) && !back.Selection);
+    }
+
+    void TestImageAdjustments()
+    {
+        using namespace Dimension::Imaging;
+        auto run = [](const Adjustment& a, const glm::vec3& c) { return Adjust(Prepare(a), c); };
+        Adjustment a;
+        // Curves: through its points, monotone between them.
+        std::vector<glm::vec2> pts = { { 0, 0 }, { 0.5f, 0.7f }, { 1, 1 } };
+        CHECK(Near(CurveAt(pts, 0.5f), 0.7f) && Near(CurveAt(pts, 0.0f), 0.0f) && Near(CurveAt(pts, 1.0f), 1.0f));
+        float last = -1.0f;
+        bool monotone = true;
+        for (int i = 0; i <= 100; ++i)
+        {
+            float v = CurveAt(pts, i / 100.0f);
+            monotone &= v >= last - 1e-5f;
+            last = v;
+        }
+        CHECK(monotone);
+        a.Type = AdjustmentType::Curves;
+        a.Curve[0] = pts;
+        CHECK(Near(run(a, glm::vec3(0.5f)), glm::vec3(0.7f), 0.01f));
+        a.Curve[1] = { { 0, 0 }, { 1, 0.5f } }; // red halved after the master curve
+        CHECK(Near(run(a, glm::vec3(0.5f)), glm::vec3(0.35f, 0.7f, 0.7f), 0.01f));
+        // Levels: input white at 0.5 doubles; gamma brightens midtones; output range.
+        a = Adjustment();
+        a.Type = AdjustmentType::Levels;
+        a.InWhite[0] = 0.5f;
+        CHECK(Near(run(a, glm::vec3(0.25f)), glm::vec3(0.5f), 0.01f) && Near(run(a, glm::vec3(0.8f)), glm::vec3(1.0f), 0.01f));
+        a.InWhite[0] = 1.0f;
+        a.Gamma[0] = 2.0f;
+        CHECK(run(a, glm::vec3(0.25f)).r > 0.45f);
+        a.Gamma[0] = 1.0f;
+        a.OutBlack[2] = 0.5f;
+        CHECK(Near(run(a, glm::vec3(0.0f)), glm::vec3(0.0f, 0.5f, 0.0f), 0.01f));
+        // Brightness/Contrast, Exposure, Invert, Posterize, Threshold, Gradient Map.
+        a = Adjustment();
+        a.Brightness = 50.0f;
+        CHECK(run(a, glm::vec3(0.5f)).r > 0.55f);
+        a = Adjustment();
+        a.Contrast = 50.0f;
+        CHECK(run(a, glm::vec3(0.7f)).r > 0.75f && run(a, glm::vec3(0.3f)).r < 0.25f && Near(run(a, glm::vec3(0.5f)).r, 0.5f, 0.01f));
+        a = Adjustment();
+        a.Type = AdjustmentType::Exposure;
+        a.Exposure = 1.0f;
+        CHECK(Near(run(a, glm::vec3(0.5f)).r, 0.6858f, 0.01f)); // (twice the light of sRGB 0.5)
+        a.Type = AdjustmentType::Invert;
+        CHECK(Near(run(a, glm::vec3(0.2f, 0.4f, 1.0f)), glm::vec3(0.8f, 0.6f, 0.0f), 0.01f));
+        a.Type = AdjustmentType::Posterize;
+        a.Levels = 2;
+        CHECK(Near(run(a, glm::vec3(0.3f, 0.6f, 0.9f)), glm::vec3(0.0f, 1.0f, 1.0f), 0.01f));
+        a.Type = AdjustmentType::Threshold;
+        CHECK(run(a, glm::vec3(0.9f)) == glm::vec3(1.0f) && run(a, glm::vec3(0.1f)) == glm::vec3(0.0f));
+        a.Type = AdjustmentType::GradientMap;
+        a.MapFrom = { 1, 0, 0 };
+        a.MapTo = { 0, 0, 1 };
+        CHECK(Near(run(a, glm::vec3(0.0f)), glm::vec3(1, 0, 0), 0.01f) && Near(run(a, glm::vec3(1.0f)), glm::vec3(0, 0, 1), 0.01f));
+        // Hue/Saturation: a half turn makes red cyan; -100 saturation is gray; colorize.
+        a = Adjustment();
+        a.Type = AdjustmentType::HueSaturation;
+        a.Hue = 180.0f;
+        CHECK(Near(run(a, glm::vec3(1, 0, 0)), glm::vec3(0, 1, 1), 0.01f));
+        a.Hue = 0.0f;
+        a.Saturation = -100.0f;
+        glm::vec3 gray = run(a, glm::vec3(0.8f, 0.2f, 0.4f));
+        CHECK(Near(gray.r, gray.g, 0.01f) && Near(gray.g, gray.b, 0.01f));
+        a.Saturation = 0.0f;
+        a.Lightness = 100.0f;
+        CHECK(Near(run(a, glm::vec3(0.3f)), glm::vec3(1.0f), 0.01f));
+        // Vibrance and saturation; Black & White (red at 40%); Color Balance; Photo Filter keeps the brightness.
+        a = Adjustment();
+        a.Type = AdjustmentType::Vibrance;
+        a.VibranceSaturation = -100.0f;
+        glm::vec3 v = run(a, glm::vec3(0.9f, 0.1f, 0.1f));
+        CHECK(Near(v.r, v.g, 0.01f));
+        a.Type = AdjustmentType::BlackWhite;
+        CHECK(Near(run(a, glm::vec3(1, 0, 0)), glm::vec3(0.4f), 0.01f) && Near(run(a, glm::vec3(1, 1, 0)), glm::vec3(0.6f), 0.01f));
+        a.Tint = true;
+        glm::vec3 tinted = run(a, glm::vec3(1, 0, 0));
+        CHECK(tinted.r > tinted.b);
+        a = Adjustment();
+        a.Type = AdjustmentType::ColorBalance;
+        a.Balance[1] = { 100, 0, 0 };
+        a.PreserveLuminosity = false;
+        glm::vec3 warm = run(a, glm::vec3(0.5f));
+        CHECK(warm.r > 0.6f && Near(warm.g, 0.5f, 0.01f));
+        a.Type = AdjustmentType::PhotoFilter;
+        a.PreserveLuminosity = true;
+        glm::vec3 filtered = run(a, glm::vec3(0.5f));
+        CHECK(Near(Luminance(filtered), 0.5f, 0.02f) && filtered.r > filtered.b);
+
+        // An adjustment layer changes what is under it, faded by its mask and opacity.
+        Document doc = Document::Create(4, 4, glm::vec4(0.2f, 0.4f, 0.6f, 1.0f));
+        Adjustment inv;
+        inv.Type = AdjustmentType::Invert;
+        int adj = doc.AddAdjustment(inv, 1);
+        CHECK(doc.Layers[(size_t)adj].IsAdjustment() && doc.Layers[(size_t)adj].HasMask() && !doc.Layers[(size_t)adj].HasPixels());
+        CHECK(Near(Unpack(doc.Flatten().At(0, 0)), glm::vec4(0.8f, 0.6f, 0.4f, 1.0f), 0.01f));
+        doc.Layers[(size_t)adj].EditMask().Values[0] = 0;
+        doc.Layers[(size_t)adj].Opacity = 0.5f;
+        Bitmap flat = doc.Flatten();
+        CHECK(Near(Unpack(flat.At(0, 0)), glm::vec4(0.2f, 0.4f, 0.6f, 1.0f), 0.01f) && Near(Unpack(flat.At(1, 0)), glm::vec4(0.5f, 0.5f, 0.5f, 1.0f), 0.01f));
+        // Layers above it are not changed; it keeps to its group.
+        int top = doc.AddLayer("Top", 2);
+        doc.Layers[(size_t)top].Edit().At(2, 2) = Pack({ 1, 0, 0, 1 });
+        CHECK(doc.Flatten().At(2, 2) == Pack({ 1, 0, 0, 1 }));
+        // The file keeps it.
+        Document back;
+        CHECK(Document::Deserialize(doc.Serialize(), back) && back.Layers[(size_t)adj].IsAdjustment() && back.Layers[(size_t)adj].Adjust.Type == AdjustmentType::Invert);
+        CHECK(back.Flatten().Pixels == doc.Flatten().Pixels);
+        Adjustment curves;
+        curves.Type = AdjustmentType::Curves;
+        curves.Curve[2] = { { 0, 0.1f }, { 0.4f, 0.6f }, { 1, 0.9f } };
+        curves.Brightness = 3.0f;
+        Adjustment again = AdjustmentFromJson(ToJson(curves));
+        CHECK(again.Type == AdjustmentType::Curves && again.Curve[2].size() == 3 && Near(again.Curve[2][1].y, 0.6f));
+        // Merging a layer down into the picture under it (the adjustment above stays).
+        // Destructive: the picture itself through an adjustment, only where selected.
+        Bitmap pic = Bitmap::Solid(4, 4, Pack({ 0.2f, 0.4f, 0.6f, 1.0f }));
+        Mask half = Mask::Solid(4, 4, 0);
+        half.Values[0] = 255;
+        Bitmap changed = ApplyAdjustment(pic, inv, &half);
+        CHECK(Near(Unpack(changed.At(0, 0)), glm::vec4(0.8f, 0.6f, 0.4f, 1.0f), 0.01f) && changed.At(1, 0) == pic.At(1, 0));
+        auto hist = Histogram(pic, 1);
+        CHECK(hist[51] == 16);
+    }
+
+    void TestImageFilters()
+    {
+        using namespace Dimension::Imaging;
+        // A white square on black.
+        Bitmap sq = Bitmap::Solid(32, 32, Pack({ 0, 0, 0, 1 }));
+        for (uint32_t y = 12; y < 20; ++y)
+            for (uint32_t x = 12; x < 20; ++x) sq.At(x, y) = Pack({ 1, 1, 1, 1 });
+        auto lum = [](const Bitmap& b, uint32_t x, uint32_t y) { return Unpack(b.At(x, y)).r; };
+        FilterSettings f;
+        f.Radius = 2.0f;
+        Bitmap g = ApplyFilter(sq, f, nullptr);
+        CHECK(lum(g, 11, 16) > 0.1f && lum(g, 15, 15) > 0.7f && lum(g, 2, 2) < 0.01f);
+        float before = 0, after = 0;
+        for (uint32_t i = 0; i < 32 * 32; ++i) before += Unpack(sq.Pixels[i]).r, after += Unpack(g.Pixels[i]).r;
+        CHECK(Near(before, after, 1.0f)); // (a blur keeps the light)
+        f.Type = FilterType::BoxBlur;
+        CHECK(lum(ApplyFilter(sq, f, nullptr), 11, 16) > 0.1f);
+        f.Type = FilterType::MotionBlur;
+        f.Angle = 0.0f;
+        f.Distance = 8.0f;
+        Bitmap mb = ApplyFilter(sq, f, nullptr);
+        CHECK(lum(mb, 10, 16) > 0.1f && lum(mb, 16, 9) < 0.01f); // (along x only)
+        // Sharpening makes the edge steeper; a selection keeps it to the left half.
+        Bitmap soft = GaussianBlur(sq, 1.5f);
+        f.Type = FilterType::UnsharpMask;
+        f.Radius = 2.0f;
+        f.Amount = 1.5f;
+        Bitmap sharp = ApplyFilter(soft, f, nullptr);
+        CHECK(lum(sharp, 13, 16) > lum(soft, 13, 16) && lum(sharp, 10, 16) <= lum(soft, 10, 16));
+        Mask left = Mask::Solid(32, 32, 0);
+        for (uint32_t y = 0; y < 32; ++y)
+            for (uint32_t x = 0; x < 16; ++x) left.Values[(size_t)y * 32 + x] = 255;
+        Bitmap partial = ApplyFilter(soft, f, &left);
+        CHECK(partial.At(13, 16) == sharp.At(13, 16) && partial.At(18, 16) == soft.At(18, 16));
+        // Noise: the same seed, the same noise; monochrome keeps gray.
+        Bitmap grayPic = Bitmap::Solid(16, 16, Pack({ 0.5f, 0.5f, 0.5f, 1 }));
+        f = FilterSettings();
+        f.Type = FilterType::AddNoise;
+        f.Amount = 1.0f;
+        f.Monochrome = true;
+        Bitmap n1 = ApplyFilter(grayPic, f, nullptr), n2 = ApplyFilter(grayPic, f, nullptr);
+        CHECK(n1.Pixels == n2.Pixels && n1.Pixels != grayPic.Pixels);
+        glm::vec4 np = Unpack(n1.At(3, 5));
+        CHECK(Near(np.r, np.g, 0.005f) && Near(np.g, np.b, 0.005f));
+        // Median takes out a lone speck; High Pass of a flat picture is mid gray; Mosaic averages cells.
+        Bitmap speck = grayPic;
+        speck.At(8, 8) = Pack({ 1, 1, 1, 1 });
+        f = FilterSettings();
+        f.Type = FilterType::Median;
+        f.Radius = 1.0f;
+        CHECK(ApplyFilter(speck, f, nullptr).At(8, 8) == grayPic.At(8, 8));
+        f.Type = FilterType::HighPass;
+        f.Radius = 3.0f;
+        CHECK(Near(Unpack(ApplyFilter(Bitmap::Solid(8, 8, Pack({ 0.2f, 0.7f, 0.1f, 1 })), f, nullptr).At(4, 4)), glm::vec4(0.5f, 0.5f, 0.5f, 1), 0.01f));
+        Bitmap stripes = Bitmap::Solid(4, 4, 0u);
+        for (uint32_t y = 0; y < 4; ++y)
+            for (uint32_t x = 0; x < 4; ++x) stripes.At(x, y) = x % 2 ? Pack({ 1, 1, 1, 1 }) : Pack({ 0, 0, 0, 1 });
+        f.Type = FilterType::Mosaic;
+        f.Radius = 2.0f;
+        CHECK(Near(Unpack(ApplyFilter(stripes, f, nullptr).At(0, 0)).r, 0.5f, 0.01f));
+        f.Type = FilterType::Emboss;
+        f.Distance = 1.0f;
+        CHECK(Near(Unpack(ApplyFilter(grayPic, f, nullptr).At(5, 5)).r, 0.5f, 0.01f));
+        f.Type = FilterType::FindEdges;
+        Bitmap edges = ApplyFilter(sq, f, nullptr);
+        CHECK(lum(edges, 4, 4) > 0.99f && lum(edges, 12, 16) < 0.5f);
+        // A mask filtered as gray.
+        Mask m = Mask::Solid(16, 16, 0);
+        m.Values[(size_t)8 * 16 + 8] = 255;
+        Mask blurredMask = ApplyToMask(m, [&](const Bitmap& b) {
+            FilterSettings gb;
+            gb.Radius = 1.5f;
+            return ApplyFilter(b, gb, nullptr);
+        });
+        CHECK(blurredMask.At(8, 8) < 255 && blurredMask.At(9, 8) > 0);
+    }
+
+    void TestImageEffects()
+    {
+        using namespace Dimension::Imaging;
+        // The distance field: 0 inside, the true distance outside.
+        std::vector<uint8_t> inside(20 * 20, 0);
+        inside[(size_t)10 * 20 + 10] = 1;
+        std::vector<float> d = DistanceField(inside, 20, 20);
+        CHECK(d[(size_t)10 * 20 + 10] == 0.0f && Near(d[(size_t)10 * 20 + 13], 9.0f) && Near(d[(size_t)14 * 20 + 13], 25.0f));
+
+        // A red square on a transparent layer over white.
+        Document doc = Document::Create(40, 40, glm::vec4(1.0f));
+        int l = doc.AddLayer("Shape", 1);
+        Bitmap& px = doc.Layers[(size_t)l].Edit();
+        for (uint32_t y = 15; y < 25; ++y)
+            for (uint32_t x = 15; x < 25; ++x) px.At(x, y) = Pack({ 1, 0, 0, 1 });
+        Bitmap plain = doc.Flatten();
+        // Stroke outside: black around it, the square itself unchanged.
+        LayerEffects& fx = doc.Layers[(size_t)l].Effects;
+        fx.Stroke.Enabled = true;
+        fx.Stroke.Size = 3.0f;
+        Bitmap stroked = doc.Flatten();
+        CHECK(stroked.At(13, 20) == Pack({ 0, 0, 0, 1 }) && stroked.At(20, 20) == Pack({ 1, 0, 0, 1 }) && stroked.At(8, 20) == Pack(glm::vec4(1.0f)));
+        CHECK(stroked.At(11, 11) == Pack(glm::vec4(1.0f))); // (round corners: diagonal distance past the size)
+        // Inside: the square's edge black, outside untouched.
+        fx.Stroke.Position = 1;
+        Bitmap inner = doc.Flatten();
+        CHECK(inner.At(15, 20) == Pack({ 0, 0, 0, 1 }) && inner.At(13, 20) == Pack(glm::vec4(1.0f)) && inner.At(20, 20) == Pack({ 1, 0, 0, 1 }));
+        fx.Stroke.Enabled = false;
+        // Drop shadow: darker below-right (light from the upper left), nothing above-left.
+        fx.DropShadow.Enabled = true;
+        fx.DropShadow.Distance = 4.0f;
+        fx.DropShadow.Size = 0.0f;
+        fx.DropShadow.Opacity = 1.0f;
+        Bitmap shadow = doc.Flatten();
+        CHECK(Unpack(shadow.At(26, 26)).r < 0.5f && shadow.At(13, 13) == Pack(glm::vec4(1.0f)) && shadow.At(20, 20) == Pack({ 1, 0, 0, 1 }));
+        fx.DropShadow.Enabled = false;
+        // Outer glow (screen) on white changes nothing; on black it shows.
+        fx.OuterGlow.Enabled = true;
+        CHECK(doc.Flatten().Pixels == plain.Pixels);
+        fx.OuterGlow.Enabled = false;
+        // Color overlay replaces the color; Gradient overlay goes from one end to the other.
+        fx.ColorOverlay.Enabled = true;
+        fx.ColorOverlay.Color = { 0, 0, 1 };
+        CHECK(doc.Flatten().At(20, 20) == Pack({ 0, 0, 1, 1 }));
+        fx.ColorOverlay.Enabled = false;
+        fx.GradientOverlay.Enabled = true;
+        fx.GradientOverlay.Angle = 0.0f; // left (black) to right (white)
+        Bitmap grad = doc.Flatten();
+        CHECK(Unpack(grad.At(15, 20)).r < 0.15f && Unpack(grad.At(24, 20)).r > 0.85f);
+        fx.GradientOverlay.Enabled = false;
+        // Inner glow and inner shadow touch the edge, not the middle.
+        fx.InnerGlow.Enabled = true;
+        fx.InnerGlow.Color = { 0, 1, 0 };
+        fx.InnerGlow.Mode = LayerBlend::Normal;
+        fx.InnerGlow.Opacity = 1.0f;
+        fx.InnerGlow.Size = 3.0f;
+        Bitmap glow = doc.Flatten();
+        CHECK(Unpack(glow.At(15, 20)).g > 0.2f && glow.At(20, 20) == Pack({ 1, 0, 0, 1 }));
+        fx.InnerGlow.Enabled = false;
+        fx.InnerShadow.Enabled = true;
+        fx.InnerShadow.Opacity = 1.0f;
+        fx.InnerShadow.Size = 0.0f;
+        fx.InnerShadow.Distance = 3.0f;
+        Bitmap ishadow = doc.Flatten();
+        CHECK(Unpack(ishadow.At(16, 16)).r < 0.5f && ishadow.At(23, 23) == Pack({ 1, 0, 0, 1 }));
+        // The render is kept until the pixels or effects change.
+        auto styled = doc.Layers[(size_t)l].Styled;
+        doc.Flatten();
+        CHECK(doc.Layers[(size_t)l].Styled == styled);
+        fx.InnerShadow.Distance = 4.0f;
+        doc.Flatten();
+        CHECK(doc.Layers[(size_t)l].Styled != styled);
+        // The file keeps the effects; merging down bakes them in.
+        fx.Stroke.Enabled = true;
+        LayerEffects again = EffectsFromJson(ToJson(fx));
+        CHECK(again.Stroke.Enabled && again.InnerShadow.Enabled && Near(again.InnerShadow.Distance, 4.0f) && again.Hash() == fx.Hash());
+        Document back;
+        CHECK(Document::Deserialize(doc.Serialize(), back) && back.Layers[(size_t)l].Effects.Stroke.Enabled);
+        Bitmap expect = doc.Flatten();
+        CHECK(back.Flatten().Pixels == expect.Pixels);
+        int merged = doc.MergeDown(l);
+        CHECK(merged == 0 && !doc.Layers[0].Effects.Any() && doc.Flatten().Pixels == expect.Pixels);
+    }
+
+    void TestImageShapes()
+    {
+        using namespace Dimension::Imaging;
+        auto alpha = [](const Bitmap& b, uint32_t x, uint32_t y) { return (b.At(x, y) >> 24) / 255.0f; };
+        auto coverage = [](const Bitmap& b) {
+            float sum = 0.0f;
+            for (uint32_t p : b.Pixels) sum += (p >> 24) / 255.0f;
+            return sum;
+        };
+        ShapeData s;
+        s.Center = { 50, 50 };
+        s.Size = { 40, 20 };
+        s.FillColor = { 1, 0, 0, 1 };
+        Bitmap rect = RenderShape(s, 100, 100);
+        CHECK(Near(coverage(rect), 800.0f, 2.0f) && rect.At(50, 50) == Pack({ 1, 0, 0, 1 }) && alpha(rect, 75, 50) == 0.0f);
+        s.Kind = ShapeKind::Ellipse;
+        CHECK(Near(coverage(RenderShape(s, 100, 100)), 3.14159f * 20 * 10, 6.0f));
+        s.Kind = ShapeKind::RoundedRectangle;
+        s.Radius = 8.0f;
+        Bitmap rounded = RenderShape(s, 100, 100);
+        CHECK(alpha(rounded, 30, 40) < 0.5f && alpha(rounded, 50, 40) > 0.99f); // (the corner cut)
+        // A rotated rectangle: a quarter turn swaps its sides.
+        s.Kind = ShapeKind::Rectangle;
+        s.Rotation = 90.0f;
+        Bitmap turned = RenderShape(s, 100, 100);
+        CHECK(alpha(turned, 50, 33) > 0.99f && alpha(turned, 35, 50) == 0.0f);
+        s.Rotation = 0.0f;
+        // Polygon and star: the middle in, between the points of a star out.
+        s.Kind = ShapeKind::Star;
+        s.Size = { 60, 60 };
+        s.Sides = 5;
+        Bitmap star = RenderShape(s, 100, 100);
+        CHECK(alpha(star, 50, 50) > 0.99f && alpha(star, 50, 21) > 0.5f && alpha(star, 72, 30) < 0.5f);
+        s.Kind = ShapeKind::Polygon;
+        s.Sides = 6;
+        CHECK(alpha(RenderShape(s, 100, 100), 50, 50) > 0.99f);
+        // A line: its length and weight, at an angle.
+        s.Kind = ShapeKind::Line;
+        s.Size = { 60, 4 };
+        s.Rotation = 45.0f;
+        Bitmap line = RenderShape(s, 100, 100);
+        CHECK(alpha(line, 60, 60) > 0.9f && alpha(line, 60, 40) == 0.0f);
+        // Strokes: inside stays within the box, outside goes past it, center straddles.
+        s = ShapeData();
+        s.Center = { 50, 50 };
+        s.Size = { 40, 40 };
+        s.Fill = false;
+        s.Stroke = true;
+        s.StrokeWidth = 4.0f;
+        s.StrokeColor = { 0, 0, 1, 1 };
+        Bitmap inside = RenderShape(s, 100, 100);
+        CHECK(alpha(inside, 31, 50) > 0.99f && alpha(inside, 28, 50) == 0.0f && alpha(inside, 50, 50) == 0.0f);
+        s.StrokeAlign = 2;
+        Bitmap outside = RenderShape(s, 100, 100);
+        CHECK(alpha(outside, 28, 50) > 0.99f && alpha(outside, 31, 50) == 0.0f);
+        s.StrokeAlign = 1;
+        Bitmap center = RenderShape(s, 100, 100);
+        CHECK(alpha(center, 29, 50) > 0.99f && alpha(center, 31, 50) > 0.99f && alpha(center, 26, 50) == 0.0f);
+        // Outline and corners.
+        CHECK(ShapeOutline(s).size() == 4 && Near(ShapeCorners(s)[2], glm::vec2(70, 70)));
+        ShapeData back = ShapeFromJson(ToJson(s));
+        CHECK(back.StrokeAlign == 1 && back.Stroke && Near(back.Size, s.Size));
+    }
+
+    void TestImageText()
+    {
+        using namespace Dimension::Imaging;
+        TextData t;
+        t.Text = "Hello";
+        t.Size = 40.0f;
+        t.Position = { 20, 60 };
+        TextLayout l = LayoutText(t);
+        CHECK(l.Lines.size() == 1 && l.Lines[0].Carets.size() == 6 && l.Lines[0].Width > 60.0f && l.Ascent > 20.0f);
+        for (size_t i = 1; i < l.Lines[0].Carets.size(); ++i) CHECK(l.Lines[0].Carets[i] > l.Lines[0].Carets[i - 1]);
+        Bitmap img = RenderText(t, 200, 100);
+        float sum = 0.0f;
+        Rect drawn;
+        for (uint32_t y = 0; y < 100; ++y)
+            for (uint32_t x = 0; x < 200; ++x)
+                if (uint32_t a = img.At(x, y) >> 24) sum += a / 255.0f, drawn.Add((int)x, (int)y);
+        CHECK(sum > 200.0f && drawn.X0 >= 20 && drawn.Y1 <= 62 && drawn.Y0 >= 60 - 40);
+        // More text is wider; tracking spreads it; centered text straddles its position.
+        TextData longer = t;
+        longer.Text = "Hello there";
+        CHECK(LayoutText(longer).Lines[0].Width > l.Lines[0].Width);
+        TextData spaced = t;
+        spaced.Tracking = 5.0f;
+        CHECK(Near(LayoutText(spaced).Lines[0].Width, l.Lines[0].Width + 25.0f, 0.01f));
+        TextData centered = t;
+        centered.Align = 1;
+        TextLayout cl = LayoutText(centered);
+        CHECK(Near(cl.Lines[0].X, -cl.Lines[0].Width * 0.5f));
+        // Lines; the box.
+        TextData two = t;
+        two.Text = "Hi\nthere";
+        TextLayout tl = LayoutText(two);
+        CHECK(tl.Lines.size() == 2 && Near(tl.Lines[1].Baseline, 48.0f) && tl.Lines[1].Start == 3 && tl.Lines[0].End == 2);
+        auto corners = TextCorners(two, tl);
+        CHECK(corners[0].y < 60.0f && corners[2].y > 108.0f);
+        // Rotation turns it about its position; canvas and text frames match.
+        TextData rot = t;
+        rot.Rotation = 90.0f;
+        CHECK(Near(TextToCanvas(rot, { 10, 0 }), glm::vec2(20, 70)) && Near(CanvasToText(rot, { 20, 70 }), glm::vec2(10, 0)));
+        // Bold covers more; italic leans; no antialias: whole pixels.
+        TextData bold = t;
+        bold.FauxBold = true;
+        float boldSum = 0.0f;
+        for (uint32_t p : RenderText(bold, 200, 100).Pixels) boldSum += (p >> 24) / 255.0f;
+        CHECK(boldSum > sum * 1.1f);
+        TextData hard = t;
+        hard.Antialias = false;
+        bool whole = true;
+        for (uint32_t p : RenderText(hard, 200, 100).Pixels) whole &= (p >> 24) == 0 || (p >> 24) == 255;
+        CHECK(whole);
+        TextData back = TextFromJson(ToJson(two));
+        CHECK(back.Text == two.Text && Near(back.Position, two.Position) && back.Size == two.Size);
+        // The fonts to choose from start with the built-in one.
+        const auto& fonts = FindFonts(fs::temp_directory_path() / "DimensionNoFonts");
+        CHECK(!fonts.empty() && fonts[0].Path.empty());
+    }
+
+    void TestImageVectorLayers()
+    {
+        using namespace Dimension::Imaging;
+        Document doc = Document::Create(100, 80, glm::vec4(1.0f));
+        ShapeData s;
+        s.Center = { 30, 30 };
+        s.Size = { 20, 20 };
+        s.FillColor = { 1, 0, 0, 1 };
+        int shape = doc.AddShape(s, 1);
+        TextData t;
+        t.Text = "Ab";
+        t.Position = { 50, 60 };
+        t.Size = 30.0f;
+        int text = doc.AddText(t, 2);
+        CHECK(doc.Layers[(size_t)shape].IsVector() && !doc.Layers[(size_t)shape].HasPixels() && doc.Layers[(size_t)text].Name == "Ab");
+        Bitmap flat = doc.Flatten();
+        CHECK(flat.At(30, 30) == Pack({ 1, 0, 0, 1 }) && flat.At(10, 10) == Pack(glm::vec4(1.0f)));
+        // Drawn again only when its settings change.
+        auto pixels = doc.Layers[(size_t)shape].Pixels;
+        doc.Flatten();
+        CHECK(doc.Layers[(size_t)shape].Pixels == pixels);
+        doc.Layers[(size_t)shape].Shape.Center = { 60, 30 };
+        flat = doc.Flatten();
+        CHECK(doc.Layers[(size_t)shape].Pixels != pixels && flat.At(60, 30) == Pack({ 1, 0, 0, 1 }) && flat.At(30, 30) == Pack(glm::vec4(1.0f)));
+        // Effects work on them.
+        doc.Layers[(size_t)shape].Effects.Stroke.Enabled = true;
+        doc.Layers[(size_t)shape].Effects.Stroke.Size = 3.0f;
+        CHECK(doc.Flatten().At(48, 30) == Pack({ 0, 0, 0, 1 }));
+        // The file keeps their settings (no pixels) and draws them the same.
+        std::vector<uint8_t> bytes = doc.Serialize();
+        Document back;
+        CHECK(Document::Deserialize(bytes, back) && back.Layers[(size_t)text].Kind == LayerKind::Text && back.Layers[(size_t)text].Text.Text == "Ab");
+        CHECK(back.Flatten().Pixels == doc.Flatten().Pixels);
+        // Rasterize: a pixel layer with what it showed.
+        Bitmap before = doc.Flatten();
+        doc.Rasterize(text);
+        CHECK(doc.Layers[(size_t)text].HasPixels() && doc.Flatten().Pixels == before.Pixels);
+        // Canvas changes carry the settings: crop moves, rotate turns, resize scales.
+        Reframe(doc, 100, 80, { 10, 5 });
+        CHECK(Near(doc.Layers[(size_t)shape].Shape.Center, glm::vec2(70, 35)) && doc.Flatten().At(70, 35) == Pack({ 1, 0, 0, 1 }));
+        RotateCanvas(doc, 1); // (70, 35) in 100x80 -> (80 - 35, 70) = (45, 70)
+        CHECK(Near(doc.Layers[(size_t)shape].Shape.Center, glm::vec2(45, 70)) && Near(doc.Layers[(size_t)shape].Shape.Rotation, 90.0f));
+        CHECK(doc.Flatten().At(45, 70) == Pack({ 1, 0, 0, 1 }));
+        ResizeImage(doc, 40, 50, Resample::Bilinear);
+        CHECK(Near(doc.Layers[(size_t)shape].Shape.Center, glm::vec2(22.5f, 35)) && Near(doc.Layers[(size_t)shape].Shape.Size, glm::vec2(10, 10)));
+    }
+
+    void TestImageGameTools()
+    {
+        using namespace Dimension::Imaging;
+        // Offset wraps around.
+        Bitmap img = Bitmap::Solid(8, 4, 0u);
+        img.At(7, 3) = Pack({ 1, 0, 0, 1 });
+        Bitmap off = OffsetWrap(img, { 1, 1 });
+        CHECK(off.At(0, 0) == Pack({ 1, 0, 0, 1 }) && off.At(7, 3) == 0u);
+        CHECK(OffsetWrap(img, { -8, 4 }).Pixels == img.Pixels);
+        // Seamless: the edges match the other side (left column like the right one, as a tiling would see).
+        Bitmap ramp = Bitmap::Solid(32, 32, 0u);
+        for (uint32_t y = 0; y < 32; ++y)
+            for (uint32_t x = 0; x < 32; ++x) ramp.At(x, y) = Pack({ x / 31.0f, y / 31.0f, 0.5f, 1 });
+        Bitmap seamless = MakeSeamless(ramp, 0.5f);
+        float jumpBefore = std::abs(Unpack(ramp.At(0, 10)).r - Unpack(ramp.At(31, 10)).r);
+        float jumpAfter = std::abs(Unpack(seamless.At(0, 10)).r - Unpack(seamless.At(31, 10)).r);
+        CHECK(jumpBefore > 0.9f && jumpAfter < 0.1f);
+        CHECK(Near(Unpack(seamless.At(16, 16)), Unpack(ramp.At(16, 16)), 0.01f)); // (the middle kept)
+        // Normal map: flat is straight up (128, 128, 255); a slope rising right tilts the normal left.
+        Bitmap flat = NormalMap(Bitmap::Solid(8, 8, Pack({ 0.5f, 0.5f, 0.5f, 1 })), 2.0f, false, true);
+        CHECK(flat.At(3, 3) == Pack({ 0.5f, 0.5f, 1.0f, 1.0f }));
+        Bitmap slope = Bitmap::Solid(16, 16, 0u);
+        for (uint32_t y = 0; y < 16; ++y)
+            for (uint32_t x = 0; x < 16; ++x) slope.At(x, y) = Pack({ x / 15.0f, x / 15.0f, x / 15.0f, 1 });
+        glm::vec4 n = Unpack(NormalMap(slope, 4.0f, false, false).At(8, 8));
+        CHECK(n.r < 0.45f && Near(n.g, 0.5f, 0.02f) && n.b > 0.5f);
+        // Heights rising downwards: green up (OpenGL), and down with Invert Y.
+        Bitmap down = Bitmap::Solid(16, 16, 0u);
+        for (uint32_t y = 0; y < 16; ++y)
+            for (uint32_t x = 0; x < 16; ++x) down.At(x, y) = Pack({ y / 15.0f, y / 15.0f, y / 15.0f, 1 });
+        CHECK(Unpack(NormalMap(down, 4.0f, false, false).At(8, 8)).g > 0.55f && Unpack(NormalMap(down, 4.0f, true, false).At(8, 8)).g < 0.45f);
+
+        // Palettes: built in, and files in and out.
+        const auto& builtIn = BuiltInPalettes();
+        CHECK(builtIn.size() >= 5 && builtIn[0].Name == "PICO-8" && builtIn[0].Colors.size() == 16 && Near(builtIn[0].Colors[8], glm::vec3(1.0f, 0.0f, 77 / 255.0f), 0.002f));
+        fs::path dir = fs::temp_directory_path() / "DimensionPaletteTest";
+        fs::create_directories(dir);
+        Palette mine;
+        mine.Name = "Mine";
+        mine.Colors = { { 1, 0, 0 }, { 0, 0.5f, 1 } };
+        CHECK(SavePalette(dir / "Mine.gpl", mine));
+        Palette back;
+        CHECK(LoadPalette(dir / "Mine.gpl", back) && back.Name == "Mine" && back.Colors.size() == 2 && Near(back.Colors[1], glm::vec3(0, 128 / 255.0f, 1), 0.002f));
+        { std::ofstream(dir / "Two.hex") << "ff0000\n#00ff00\n"; }
+        CHECK(LoadPalette(dir / "Two.hex", back) && back.Colors.size() == 2 && Near(back.Colors[1], glm::vec3(0, 1, 0)));
+        { std::ofstream(dir / "Jasc.pal") << "JASC-PAL\n0100\n2\n0 0 255\n255 255 255\n"; }
+        CHECK(LoadPalette(dir / "Jasc.pal", back) && back.Colors.size() == 2 && Near(back.Colors[0], glm::vec3(0, 0, 1)));
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+
+        // Median cut finds the picture's colors; quantizing keeps palette colors and maps others to the nearest.
+        Bitmap two = Bitmap::Solid(10, 10, Pack({ 0.9f, 0.1f, 0.1f, 1 }));
+        for (uint32_t y = 0; y < 5; ++y)
+            for (uint32_t x = 0; x < 10; ++x) two.At(x, y) = Pack({ 0.1f, 0.1f, 0.9f, 1 });
+        std::vector<glm::vec3> found = MedianCut(two, 2);
+        CHECK(found.size() == 2 && ((found[0].b > 0.8f && found[1].r > 0.8f) || (found[0].r > 0.8f && found[1].b > 0.8f)));
+        const std::vector<glm::vec3>& gray = builtIn[3].Colors; // (black, two grays, white)
+        Bitmap mid = Bitmap::Solid(8, 8, Pack({ 0.4f, 0.4f, 0.4f, 1 }));
+        mid.At(0, 0) = Pack({ 1, 1, 1, 1 });
+        for (Dither d : { Dither::None, Dither::Ordered, Dither::FloydSteinberg })
+        {
+            Bitmap q = Quantize(mid, gray, d, false);
+            bool inPalette = true;
+            for (uint32_t p : q.Pixels)
+            {
+                glm::vec3 c = glm::vec3(Unpack(p));
+                inPalette &= std::any_of(gray.begin(), gray.end(), [&](const glm::vec3& g) { return Near(g, c, 0.003f); });
+            }
+            CHECK(inPalette && q.At(0, 0) == Pack({ 1, 1, 1, 1 }));
+        }
+        CHECK(Quantize(mid, gray, Dither::None, false).At(4, 4) == Pack(glm::vec4(gray[1], 1.0f)));
+        // Floyd-Steinberg keeps the average brightness (0.4) where plain rounding does not (0.333).
+        float avg = 0.0f;
+        Bitmap fs2 = Quantize(Bitmap::Solid(16, 16, Pack({ 0.4f, 0.4f, 0.4f, 1 })), gray, Dither::FloydSteinberg, false);
+        for (uint32_t p : fs2.Pixels) avg += Unpack(p).r;
+        CHECK(Near(avg / 256.0f, 0.4f, 0.03f));
+        // Hard alpha: clear or solid.
+        Bitmap soft = Bitmap::Solid(2, 1, Pack({ 1, 1, 1, 0.3f }));
+        soft.At(1, 0) = Pack({ 1, 1, 1, 0.7f });
+        Bitmap hard = Quantize(soft, gray, Dither::None, true);
+        CHECK((hard.At(0, 0) >> 24) == 0 && (hard.At(1, 0) >> 24) == 255);
+        // Reduce Colors as a filter (its own colors when no palette is given).
+        FilterSettings f;
+        f.Type = FilterType::ReduceColors;
+        f.Colors = 2;
+        Bitmap reduced = ApplyFilter(two, f, nullptr);
+        CHECK(Near(Unpack(reduced.At(0, 0)), glm::vec4(0.1f, 0.1f, 0.9f, 1.0f), 0.01f));
+        f.Type = FilterType::Offset;
+        f.Shift = { 1, 1 };
+        CHECK(ApplyFilter(img, f, nullptr).Pixels == off.Pixels);
+
+        // Mirrored painting: one dab, four places.
+        Document doc = Document::Create(20, 20, glm::vec4(0.0f));
+        BrushSettings pencil;
+        pencil.Aliased = true;
+        pencil.Size = 1.0f;
+        pencil.Color = { 1, 0, 0, 1 };
+        pencil.Symmetry = 3;
+        pencil.SymmetryCenter = { 10, 10 };
+        {
+            Stroke s(doc, 0, pencil);
+            s.To({ 3.5f, 4.5f });
+        }
+        const Bitmap& px = doc.Layers[0].Get();
+        CHECK(px.At(3, 4) >> 24 && px.At(16, 4) >> 24 && px.At(3, 15) >> 24 && px.At(16, 15) >> 24 && !(px.At(4, 4) >> 24));
+        // Pixel perfect: a diagonal drawn in steps has no doubled corners.
+        Document pp = Document::Create(20, 20, glm::vec4(0.0f));
+        BrushSettings perfect = pencil;
+        perfect.Symmetry = 0;
+        perfect.PixelPerfect = true;
+        {
+            Stroke s(pp, 0, perfect);
+            // (an L at each step: right, then down)
+            glm::vec2 p(2.5f, 2.5f);
+            s.To(p);
+            for (int k = 0; k < 6; ++k)
+            {
+                p.x += 1.0f;
+                s.To(p);
+                p.y += 1.0f;
+                s.To(p);
+            }
+        }
+        int count = 0;
+        for (uint32_t c : pp.Layers[0].Get().Pixels) count += (c >> 24) ? 1 : 0;
+        CHECK(count == 7 && (pp.Layers[0].Get().At(3, 2) >> 24) == 0 && (pp.Layers[0].Get().At(8, 8) >> 24));
+    }
+
     void TestMusicSongFormat()
     {
         using namespace Dimension::Music;
@@ -22509,6 +23753,19 @@ int main(int argc, char** argv)
     Run("Modeling rig weights", TestModelingRigWeights);
     Run("Modeling B-bones and envelopes", TestModelingBBonesEnvelopes);
     Run("Modeling graph editor", TestModelingGraphEditor);
+    Run("Image document", TestImageDocument);
+    Run("Image painting", TestImagePainting);
+    Run("Image groups and masks", TestImageGroupsAndMasks);
+    Run("Image tools", TestImageTools);
+    Run("Image selections", TestImageSelections);
+    Run("Image transforms", TestImageTransforms);
+    Run("Image adjustments", TestImageAdjustments);
+    Run("Image filters", TestImageFilters);
+    Run("Image effects", TestImageEffects);
+    Run("Image shapes", TestImageShapes);
+    Run("Image text", TestImageText);
+    Run("Image vector layers", TestImageVectorLayers);
+    Run("Image game tools", TestImageGameTools);
     Run("Music song format", TestMusicSongFormat);
     Run("Music rendering", TestMusicRendering);
     Run("Music sampler", TestMusicSampler);

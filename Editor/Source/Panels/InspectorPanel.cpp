@@ -3,6 +3,7 @@
 #include "../AssetPreviews.h"
 #include "Panels.h"
 #include "../EditorUI.h"
+#include "../ImageMode.h"
 #include <Dimension/Scene/ComponentRegistry.h>
 #include <Dimension/Scripting/ScriptRegistry.h>
 #include <Dimension/Scripting/ScriptableEntity.h>
@@ -1907,6 +1908,18 @@ namespace Editor
             }
             else
                 ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "This file could not be decoded.");
+        }
+        if (meta->Type == AssetType::Texture && ImageMode::IsImageFile(meta->Path))
+            if (ImGui::Button("Edit in Image Mode")) m_Ctx.RequestOpenImage = AssetManager::GetAbsolutePath(handle);
+        if (meta->Type == AssetType::ImageDocument)
+        {
+            if (ImGui::Button("Open in Image Mode")) m_Ctx.RequestOpenImage = AssetManager::GetAbsolutePath(handle);
+            Imaging::Document doc;
+            if (Imaging::Document::Load(AssetManager::GetAbsolutePath(handle), doc, false)) // (the header alone)
+            {
+                ImGui::Text("%u x %u px, %d layer%s", doc.Width, doc.Height, (int)doc.Layers.size(), doc.Layers.size() == 1 ? "" : "s");
+                ImGui::TextDisabled("Exports %s", doc.ExportPath(meta->Path).generic_string().c_str());
+            }
         }
         if (meta->Type == AssetType::Texture)
         {

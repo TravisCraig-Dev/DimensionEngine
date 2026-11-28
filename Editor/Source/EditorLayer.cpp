@@ -43,6 +43,7 @@
 #include <Dimension/Scene/SceneManager.h>
 #include <Dimension/Scripting/CSharpRuntime.h>
 #include <Dimension/Scripting/EditModeScripts.h>
+#include <Dimension/Image/ImageGpu.h>
 #include <Dimension/Scripting/CSharpProject.h>
 #include <Dimension/Scripting/ManagedBuild.h>
 #include <Dimension/Scripting/ScriptRegistry.h>
@@ -162,6 +163,7 @@ namespace Editor
         m_MeshEdit = MakeScope<MeshEditMode>(m_Ctx);
         m_Music = MakeScope<MusicMode>(m_Ctx);
         m_Code = MakeScope<CodeMode>(m_Ctx);
+        m_Image = MakeScope<ImageMode>(m_Ctx);
         m_Code->BuildScripts = [this] { BuildCSharp(); };
         m_Code->BuildState = [this] { return m_CSharpBuild ? m_CSharpBuild->load() : 0; };
         m_Code->Language = [this] { return m_Language.get(); };
@@ -296,6 +298,12 @@ namespace Editor
             if (p.is_relative()) p = Project::GetDirectory() / p;
             m_Code->Open(p);
         }
+        if (!m_Options.ImagePath.empty())
+        {
+            fs::path p = m_Options.ImagePath;
+            if (p.is_relative()) p = AssetManager::GetAssetsDirectory() / p;
+            m_Ctx.RequestOpenImage = p;
+        }
         if (!m_Options.RenderSong.empty())
         {
             auto resolve = [](fs::path p) { return p.is_relative() ? AssetManager::GetAssetsDirectory() / p : p; };
@@ -420,6 +428,8 @@ namespace Editor
         m_MeshEdit->Exit(); // (writes the model and a painted texture)
         m_Music->Close();   // (writes the song)
         m_Code->Close();    // (saves the scripts)
+        m_Image->Close();   // (saves the image)
+        Imaging::Gpu::Release(); // (its GPU buffers and pipelines, before the device goes)
         // Not when the editor quits before it drew a frame (--render-song): the windows were never docked, and saving
         // that would leave the project with every window floating.
         if (m_LayoutDrawn) ImGui::SaveIniSettingsToDisk(m_IniPath.c_str());
@@ -433,6 +443,7 @@ namespace Editor
     {
         m_Music->Close(); // (saves the song)
         m_Code->Close();  // (saves the scripts)
+        m_Image->Close(); // (saves the image)
         if (m_Ctx.IsPlaying()) Stop();
         return ConfirmDiscardChanges();
     }
@@ -755,6 +766,21 @@ namespace Editor
 
     void EditorLayer::OnUpdate(float dt)
     {
+        if (m_Options.ImageGpuCheck && ++m_AutomationFrames == 3)
+        {
+            bool ok = false;
+            std::string report = Imaging::Gpu::SelfCheck(ok);
+            for (size_t start = 0; start < report.size();)
+            {
+                size_t end = report.find('\n', start);
+                if (end == std::string::npos) end = report.size();
+                if (end > start) (ok ? Log::Info("Image GPU check: {}", report.substr(start, end - start)) : Log::Error("Image GPU check: {}", report.substr(start, end - start)));
+                start = end + 1;
+            }
+            Log::Info("Image GPU check {}", ok ? "PASSED" : "FAILED");
+            Imaging::Gpu::Release();
+            Application::Get().GetWindow().SetShouldClose(true);
+        }
         UpdateStartup();
         UpdateFrameRateCap(dt);
         if (!m_Options.OpenSceneLater.empty() && ++m_AutomationFrames == 30)
@@ -803,13 +829,26 @@ namespace Editor
             fs::path p = *m_Ctx.RequestOpenScript;
             m_Ctx.RequestOpenScript.reset();
             if (m_Ctx.IsPlaying()) Stop();
-            m_Music->Suspend(); // (stays open behind Code Mode, for the Music tab)
+            HideWorkspaces((int)Workspace::Code); // (the song and the image stay open behind Code Mode, for their tabs)
             m_Code->Open(p);
         }
         if (m_Ctx.RequestCloseCode)
         {
             m_Ctx.RequestCloseCode = false;
             m_Code->Close();
+        }
+        if (m_Ctx.RequestOpenImage)
+        {
+            fs::path p = *m_Ctx.RequestOpenImage;
+            m_Ctx.RequestOpenImage.reset();
+            if (m_Ctx.IsPlaying()) Stop();
+            if (m_Image->Open(p)) HideWorkspaces((int)Workspace::Image);
+            else Log::Error("Could not open the image {}", p.string());
+        }
+        if (m_Ctx.RequestCloseImage)
+        {
+            m_Ctx.RequestCloseImage = false;
+            m_Image->Close();
         }
         if (m_Ctx.RequestOpenModel)
         {
@@ -1122,9 +1161,8 @@ namespace Editor
             return;
         }
         if (m_Ctx.IsPlaying()) Stop();
-        // The model shows in the editor's windows: Code Mode closes and the song (if one is open) is put aside.
-        m_Code->Close();
-        m_Music->Suspend();
+        // The model shows in the editor's windows: Code Mode closes and the song and image (if open) are put aside.
+        HideWorkspaces();
         if (m_Ctx.InModelMode() && model == m_Ctx.ModelModeAsset()) return;
         if (m_Ctx.InStage() && !LeaveStage()) return;
         m_MeshEdit->Exit(); // (its object is in the scene being put aside)
@@ -1196,13 +1234,21 @@ namespace Editor
         if (m_Music->IsActive() && m_Music->GetSong() == song) m_Music->Resume();
         else ok = m_Music->Open(song);
         if (!ok) Log::Error("Could not open the song '{}'", AssetManager::GetDisplayName(song));
-        else m_Code->Close();
+        else HideWorkspaces((int)Workspace::Music);
+    }
+
+    void EditorLayer::HideWorkspaces(int keep)
+    {
+        if (keep != (int)Workspace::Code) m_Code->Close();
+        if (keep != (int)Workspace::Music) m_Music->Suspend();
+        if (keep != (int)Workspace::Image) m_Image->Suspend();
     }
 
     EditorLayer::Workspace EditorLayer::CurrentWorkspace() const
     {
         if (m_Code->IsActive()) return Workspace::Code;
         if (m_Music->IsShown()) return Workspace::Music;
+        if (m_Image->IsShown()) return Workspace::Image;
         if (m_Ctx.InModelMode()) return Workspace::Model;
         return Workspace::Scene;
     }
@@ -1212,16 +1258,11 @@ namespace Editor
         switch (to)
         {
         case Workspace::Scene:
-            m_Code->Close(); // (saves the scripts; they open again with the Code tab)
-            m_Music->Suspend();
+            HideWorkspaces(); // (Code Mode saves its scripts; they open again with the Code tab)
             if (m_Ctx.InModelMode()) LeaveStage();
             break;
         case Workspace::Model:
-            if (m_Ctx.InModelMode())
-            {
-                m_Code->Close();
-                m_Music->Suspend();
-            }
+            if (m_Ctx.InModelMode()) HideWorkspaces();
             else if (const AssetMetadata* meta = AssetManager::GetMetadata(m_LastModel); meta && meta->Path.extension() == ".dmodel")
                 OpenModelMode(m_LastModel);
             else
@@ -1234,6 +1275,12 @@ namespace Editor
                 m_WorkspacePicker = (int)Workspace::Music; // which song?
             break;
         case Workspace::Code: m_Ctx.RequestOpenScript = fs::path(); break; // (handled next, like Scripts > Code Mode)
+        case Workspace::Image:
+            if (!m_Image->GetFile().empty() && (m_Image->IsActive() || fs::exists(m_Image->GetFile())))
+                m_Ctx.RequestOpenImage = m_Image->GetFile();
+            else
+                m_WorkspacePicker = (int)Workspace::Image; // which image?
+            break;
         }
     }
 
@@ -1276,6 +1323,8 @@ namespace Editor
               songName.empty() ? "Music Mode: choose a song to edit" : "Music Mode: the song '" + songName + "'" },
             { Workspace::Code, "Code", std::string(),
               "Code Mode: the scripts, with live errors, completion and the debugger (" + Shortcuts::Label("file.codeMode") + ")" },
+            { Workspace::Image, "Image", m_Image->GetName(),
+              m_Image->GetFile().empty() ? "Image Mode: choose an image to edit" : "Image Mode: the image '" + m_Image->GetName() + "'" },
         };
         ImDrawList* draw = ImGui::GetWindowDrawList();
         const ImVec4 accent = UI::AccentText();
@@ -1330,32 +1379,53 @@ namespace Editor
         ImGui::SetNextWindowSizeConstraints(ImVec2(220.0f, 0.0f), ImVec2(420.0f, 440.0f));
         if (ImGui::BeginPopup("##workspacePicker"))
         {
-            const bool models = m_PickerKind == (int)Workspace::Model;
-            ImGui::TextDisabled(models ? "Edit a model" : "Edit a song");
+            const bool models = m_PickerKind == (int)Workspace::Model, images = m_PickerKind == (int)Workspace::Image;
+            ImGui::TextDisabled(models ? "Edit a model" : images ? "Edit an image" : "Edit a song");
             ImGui::Separator();
-            std::vector<std::pair<std::string, AssetHandle>> list;
-            for (AssetHandle h : AssetManager::GetAssetsOfType(models ? AssetType::Mesh : AssetType::Song))
+            std::vector<std::pair<std::string, AssetHandle>> list, textures;
+            for (AssetHandle h : AssetManager::GetAssetsOfType(models ? AssetType::Mesh : images ? AssetType::ImageDocument : AssetType::Song))
                 if (const AssetMetadata* meta = AssetManager::GetMetadata(h); meta && (!models || meta->Path.extension() == ".dmodel"))
                     list.emplace_back(AssetManager::GetDisplayName(h), h);
-            std::sort(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            // Images: the textures that have no .dimage yet too (opening one makes it).
+            if (images)
+                for (AssetHandle h : AssetManager::GetAssetsOfType(AssetType::Texture))
+                    if (const AssetMetadata* meta = AssetManager::GetMetadata(h); meta && ImageMode::IsImageFile(meta->Path) &&
+                                                                                   !fs::exists(ImageMode::DocumentFor(AssetManager::GetAbsolutePath(h))))
+                        textures.emplace_back(meta->Path.generic_string(), h);
+            auto byName = [](const auto& a, const auto& b) { return a.first < b.first; };
+            std::sort(list.begin(), list.end(), byName);
+            std::sort(textures.begin(), textures.end(), byName);
+            auto openAsset = [&](AssetHandle h) {
+                if (models) m_Ctx.RequestOpenModel = h;
+                else if (images) m_Ctx.RequestOpenImage = AssetManager::GetAbsolutePath(h);
+                else m_Ctx.RequestOpenSong = h;
+            };
             for (const auto& [label, h] : list)
             {
                 ImGui::PushID((int)(uint64_t)h);
-                if (ImGui::Selectable(label.c_str()))
-                {
-                    if (models) m_Ctx.RequestOpenModel = h;
-                    else m_Ctx.RequestOpenSong = h;
-                }
+                if (ImGui::Selectable(label.c_str())) openAsset(h);
                 ImGui::PopID();
             }
-            if (list.empty()) ImGui::TextDisabled(models ? "No models in the project yet" : "No songs in the project yet");
+            if (list.empty())
+                ImGui::TextDisabled(models ? "No models in the project yet" : images ? "No images in the project yet" : "No songs in the project yet");
+            if (!textures.empty() && ImGui::BeginMenu("Textures"))
+            {
+                for (const auto& [label, h] : textures)
+                {
+                    ImGui::PushID((int)(uint64_t)h);
+                    if (ImGui::MenuItem(label.c_str())) openAsset(h);
+                    ImGui::PopID();
+                }
+                ImGui::EndMenu();
+            }
             ImGui::Separator();
-            if (ImGui::Selectable(models ? "New Model..." : "New Song...", false, models && m_Ctx.IsPlaying() ? ImGuiSelectableFlags_Disabled : 0))
+            if (ImGui::Selectable(models ? "New Model..." : images ? "New Image..." : "New Song...", false,
+                                  models && m_Ctx.IsPlaying() ? ImGuiSelectableFlags_Disabled : 0))
             {
                 // (the New window is one of the editor's)
-                m_Code->Close();
-                m_Music->Suspend();
+                HideWorkspaces();
                 if (models) m_ShowNewModel = true;
+                else if (images) m_ShowNewImage = true;
                 else m_ShowNewSong = true;
             }
             ImGui::EndPopup();
@@ -3247,6 +3317,13 @@ namespace Editor
             style = saved;
             return;
         }
+        if (m_Image->IsShown())
+        {
+            m_Image->OnImGui();
+            InjectInput(); // (automation)
+            style = saved;
+            return;
+        }
         if (m_Code->IsActive())
         {
             m_Code->OnImGui();
@@ -3302,6 +3379,7 @@ namespace Editor
         if (m_ShowNewScene) DrawNewSceneWindow();
         if (m_ShowNewModel) DrawNewModelWindow();
         if (m_ShowNewSong) DrawNewSongWindow();
+        if (m_ShowNewImage) m_Image->DrawNewImageWindow(&m_ShowNewImage);
         if (m_ShowHub) DrawProjectHub();
         if (m_ShowUndoHistory) DrawUndoHistory();
         else m_RebindingShortcut = -1;
@@ -3433,6 +3511,7 @@ namespace Editor
             if (ImGui::MenuItem("New Scene...", Shortcuts::Label("file.new").c_str())) m_ShowNewScene = true;
             if (ImGui::MenuItem("New Model...", nullptr, false, !m_Ctx.IsPlaying())) m_ShowNewModel = true;
             if (ImGui::MenuItem("New Song...")) m_ShowNewSong = true;
+            if (ImGui::MenuItem("New Image...")) m_ShowNewImage = true;
             if (ImGui::MenuItem("Open Scene...", Shortcuts::Label("file.open").c_str())) OpenSceneWithDialog();
             // The project's last opened scenes (newest first).
             if (ImGui::BeginMenu("Open Recent"))

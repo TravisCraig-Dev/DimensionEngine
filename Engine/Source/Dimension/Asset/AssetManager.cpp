@@ -192,6 +192,7 @@ namespace Dimension
         case AssetType::AvatarMask: return "Avatar Mask";
         case AssetType::VisualEffect: return "Visual Effect";
         case AssetType::Song: return "Song";
+        case AssetType::ImageDocument: return "Image Document";
         default: return "None";
         }
     }
@@ -395,6 +396,7 @@ namespace Dimension
         if (ext == ".mask") return AssetType::AvatarMask;
         if (ext == ".vfx") return AssetType::VisualEffect;
         if (ext == ".dsong") return AssetType::Song;
+        if (ext == ".dimage") return AssetType::ImageDocument;
         if (ext == ".spriteatlas") return AssetType::SpriteAtlas;
         if (ext == ".preset") return AssetType::Preset;
         if (ext == ".csv") return AssetType::StringTable;

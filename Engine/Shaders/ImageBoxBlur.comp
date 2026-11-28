@@ -1,0 +1,30 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+// Image Mode's blur on the GPU: one box pass (along rows or columns, edges repeated) of premultiplied colors; three
+// passes each way make the Gaussian-like blur the CPU makes (BoxPass in ImageFilters.cpp), with the same windows.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Source { vec4 C[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) writeonly buffer Target { vec4 C[]; };
+
+layout(push_constant) uniform Push
+{
+    uvec2 In, Out;
+    int Width, Height, Radius, Horizontal;
+} uPush;
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= uPush.Width || p.y >= uPush.Height) return;
+    Source src = Source(uPush.In);
+    vec4 sum = vec4(0.0);
+    int r = uPush.Radius;
+    if (uPush.Horizontal != 0)
+        for (int k = -r; k <= r; ++k) sum += src.C[p.y * uPush.Width + clamp(p.x + k, 0, uPush.Width - 1)];
+    else
+        for (int k = -r; k <= r; ++k) sum += src.C[clamp(p.y + k, 0, uPush.Height - 1) * uPush.Width + p.x];
+    Target(uPush.Out).C[p.y * uPush.Width + p.x] = sum / float(2 * r + 1);
+}

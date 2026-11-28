@@ -1,4 +1,5 @@
 #include "../AssetPreviews.h"
+#include "../ImageMode.h"
 #include <fstream>
 #include <Dimension/Asset/AssetPack.h>
 #include <Dimension/Project/Project.h>
@@ -122,6 +123,8 @@ namespace Editor
             else if (type == AssetType::Song && handle.IsValid()) m_Ctx.RequestOpenSong = handle;           // Music Mode
             else if (type == AssetType::VisualEffect && handle.IsValid()) m_Ctx.RequestOpenVisualEffect = handle;
             else if (path.extension() == ".cs") m_Ctx.RequestOpenScript = path;                             // Code Mode
+            else if (type == AssetType::ImageDocument || (type == AssetType::Texture && ImageMode::IsImageFile(path)))
+                m_Ctx.RequestOpenImage = path;                                                                  // Image Mode
             else FileDialogs::OpenWithDefaultApp(path);
         }
 

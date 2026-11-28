@@ -141,6 +141,8 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--model") && i + 1 < argc) options.ModelPath = argv[++i];
         else if (!std::strcmp(argv[i], "--song") && i + 1 < argc) options.SongPath = argv[++i];
         else if (!std::strcmp(argv[i], "--script") && i + 1 < argc) options.ScriptPath = argv[++i];
+        else if (!std::strcmp(argv[i], "--image") && i + 1 < argc) options.ImagePath = argv[++i];
+        else if (!std::strcmp(argv[i], "--image-gpu-check")) options.ImageGpuCheck = true;
         else if (!std::strcmp(argv[i], "--render-song") && i + 2 < argc)
         {
             options.RenderSong = argv[++i];

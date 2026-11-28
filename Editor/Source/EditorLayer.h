@@ -12,6 +12,7 @@
 #include "MeshEditMode.h"
 #include "MusicMode.h"
 #include "CodeMode.h"
+#include "ImageMode.h"
 #include <Dimension/Audio/AudioMixer.h>
 #include <Dimension/Asset/AssetPackage.h>
 #include <Dimension/Scene/SceneTemplates.h>
@@ -33,6 +34,8 @@ namespace Editor
         std::string ModelPath;    // --model: open this .dmodel in Model Mode on startup (relative to Assets or absolute)
         std::string SongPath;     // --song: open this .dsong in Music Mode on startup (relative to Assets or absolute)
         std::string ScriptPath;   // --script: open this script in Code Mode on startup (relative to the project or absolute)
+        std::string ImagePath;    // --image: open this .dimage or image file in Image Mode on startup (relative to Assets or absolute)
+        bool ImageGpuCheck = false; // --image-gpu-check: Image Mode's GPU results against the CPU's (and times), logged; then quit
         // --render-song <song> <out>: renders the song's Playlist (Song mode) to an audio file (.ogg: Opus, else WAV),
         // normalized to -1 dB, and quits (paths relative to Assets or absolute).
         std::string RenderSong, RenderSongOut;
@@ -259,6 +262,10 @@ namespace Editor
         Scope<MeshEditMode> m_MeshEdit; // Edit Mode: modeling in the Scene view
         Scope<MusicMode> m_Music;       // Music Mode: the full-screen music workspace
         Scope<CodeMode> m_Code;         // Code Mode: the full-screen script editor
+        Scope<ImageMode> m_Image;       // Image Mode: the full-screen image editor
+        bool m_ShowNewImage = false;    // File > New Image...
+        // Puts every full-screen workspace aside (Code Mode closes, saving) except `keep`.
+        void HideWorkspaces(int keep = -1);
         // File > New Song...: a song file (the default beat) opened in Music Mode.
         bool m_ShowNewSong = false;
         std::string m_NewSongName = "New Song";
@@ -266,13 +273,13 @@ namespace Editor
         void OpenMusicMode(AssetHandle song);
         // Workspace tabs (the strip above the menu bar): the scene editor, Model Mode, Music Mode and Code Mode. Leaving
         // Music Mode or Code Mode by a tab keeps the song or the scripts open behind it; Model Mode leaves its stage.
-        enum class Workspace { Scene, Model, Music, Code };
+        enum class Workspace { Scene, Model, Music, Code, Image };
         Workspace CurrentWorkspace() const;
         void DrawWorkspaceTabs();
         void SwitchWorkspace(Workspace to); // (from the update, outside the windows)
         std::optional<Workspace> m_WorkspaceRequest;
         AssetHandle m_LastModel = AssetHandle::None(); // reopened by the Model tab
-        int m_WorkspacePicker = 0, m_PickerKind = 0;   // 1 = choose a model, 2 = choose a song (none to reopen)
+        int m_WorkspacePicker = 0, m_PickerKind = 0;   // Workspace + 0: choose a model, a song or an image (none to reopen)
         Scope<PackagesPanel> m_Packages;
         Scope<TestRunnerPanel> m_TestRunner;
         Scope<NavigationPanel> m_Navigation;

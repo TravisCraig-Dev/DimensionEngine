@@ -217,6 +217,9 @@ namespace Editor
         // Code Mode (the full-screen script editor) on this script (empty: the files open last time), and back.
         std::optional<fs::path> RequestOpenScript;
         bool RequestCloseCode = false;
+        // Image Mode (the full-screen image editor) on this .dimage or image file, and back to the editor.
+        std::optional<fs::path> RequestOpenImage;
+        bool RequestCloseImage = false;
 
         // Terrain brush (Inspector picks it, the Scene view paints with it): 0 = off, else Terrain::BrushMode + 1.
         int TerrainTool = 0;

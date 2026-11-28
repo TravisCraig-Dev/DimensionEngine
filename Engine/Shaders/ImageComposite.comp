@@ -1,0 +1,303 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+// Image Mode's compositing on the GPU: one invocation per pixel runs the document's layers as a list of operations
+// (the same math as Document::Composite on the CPU, ImageDocument.cpp): layers with their blend modes, opacities and
+// masks; groups (composited apart, or passing through); adjustment layers; layer effects (rendered on the CPU, laid here).
+// Layer pixels are RGBA8 (straight alpha, red in the lowest byte); masks and effect alphas are bytes.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+struct Op
+{
+    uint Kind;       // 0 layer, 1 under (an effect's color and alpha), 2 group begin, 3 group end, 4 pass begin, 5 pass end, 6 adjust
+    uint Mode;       // LayerBlend
+    float Opacity;
+    uint Flags;      // 1: has a mask; 2: the adjustment is a lookup table
+    uvec2 Pixels;    // layer: its pixels; under: its alpha bytes
+    uvec2 Mask;
+    uvec2 Aux;       // adjust: its table (768 floats) or settings
+    uint AdjustType; // AdjustmentType
+    uint Pad;
+    vec4 Color;      // under: its color
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Ops { Op O[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Words { uint W[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Floats { float F[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer Out { uint P[]; };
+
+layout(push_constant) uniform Push
+{
+    uvec2 OpsAddr, OutAddr;
+    uint OpCount, Width, Height, X0, Y0, AreaW, AreaH;
+} uPush;
+
+const uint Normal = 0u, Dissolve = 1u, Darken = 2u, Multiply = 3u, ColorBurn = 4u, LinearBurn = 5u, DarkerColor = 6u, Lighten = 7u, Screen = 8u,
+           ColorDodge = 9u, LinearDodge = 10u, LighterColor = 11u, Overlay = 12u, SoftLight = 13u, HardLight = 14u, VividLight = 15u,
+           LinearLight = 16u, PinLight = 17u, HardMix = 18u, Difference = 19u, Exclusion = 20u, Subtract = 21u, Divide = 22u, Hue = 23u,
+           Saturation = 24u, Color = 25u, Luminosity = 26u, PassThrough = 27u;
+
+float Lum(vec3 c) { return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b; }
+float Luminance(vec3 c) { return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b; }
+vec3 ClipColor(vec3 c)
+{
+    float l = Lum(c), n = min(c.r, min(c.g, c.b)), x = max(c.r, max(c.g, c.b));
+    if (n < 0.0) c = l + (c - l) * l / max(l - n, 1e-6);
+    if (x > 1.0) c = l + (c - l) * (1.0 - l) / max(x - l, 1e-6);
+    return c;
+}
+vec3 SetLum(vec3 c, float l) { return ClipColor(c + (l - Lum(c))); }
+float Sat(vec3 c) { return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)); }
+vec3 SetSat(vec3 c, float s)
+{
+    float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
+    return mx > mn ? (c - mn) * s / (mx - mn) : vec3(0.0);
+}
+float CDodge(float b, float s) { return b <= 0.0 ? 0.0 : s >= 1.0 ? 1.0 : min(1.0, b / (1.0 - s)); }
+float CBurn(float b, float s) { return b >= 1.0 ? 1.0 : s <= 0.0 ? 0.0 : 1.0 - min(1.0, (1.0 - b) / s); }
+float HLight(float b, float s) { return s <= 0.5 ? b * 2.0 * s : 1.0 - (1.0 - b) * (1.0 - (2.0 * s - 1.0)); }
+float SLight(float b, float s)
+{
+    if (s <= 0.5) return b - (1.0 - 2.0 * s) * b * (1.0 - b);
+    float d = b <= 0.25 ? ((16.0 * b - 12.0) * b + 4.0) * b : sqrt(b);
+    return b + (2.0 * s - 1.0) * (d - b);
+}
+float Separable(uint m, float b, float s)
+{
+    switch (m)
+    {
+    case Darken: return min(b, s);
+    case Multiply: return b * s;
+    case ColorBurn: return CBurn(b, s);
+    case LinearBurn: return max(0.0, b + s - 1.0);
+    case Lighten: return max(b, s);
+    case Screen: return b + s - b * s;
+    case ColorDodge: return CDodge(b, s);
+    case LinearDodge: return min(1.0, b + s);
+    case Overlay: return HLight(s, b);
+    case SoftLight: return SLight(b, s);
+    case HardLight: return HLight(b, s);
+    case VividLight: return s <= 0.5 ? CBurn(b, 2.0 * s) : CDodge(b, 2.0 * (s - 0.5));
+    case LinearLight: return clamp(b + 2.0 * s - 1.0, 0.0, 1.0);
+    case PinLight: return s <= 0.5 ? min(b, 2.0 * s) : max(b, 2.0 * s - 1.0);
+    case HardMix: return b + s >= 1.0 ? 1.0 : 0.0;
+    case Difference: return abs(b - s);
+    case Exclusion: return b + s - 2.0 * b * s;
+    case Subtract: return max(0.0, b - s);
+    case Divide: return s <= 0.0 ? (b <= 0.0 ? 0.0 : 1.0) : min(1.0, b / s);
+    default: return s;
+    }
+}
+vec3 BlendColors(uint m, vec3 b, vec3 s)
+{
+    switch (m)
+    {
+    case Normal:
+    case Dissolve:
+    case PassThrough: return s;
+    case DarkerColor: return Lum(s) < Lum(b) ? s : b;
+    case LighterColor: return Lum(s) > Lum(b) ? s : b;
+    case Hue: return SetLum(SetSat(s, Sat(b)), Lum(b));
+    case Saturation: return SetLum(SetSat(b, Sat(s)), Lum(b));
+    case Color: return SetLum(s, Lum(b));
+    case Luminosity: return SetLum(b, Lum(s));
+    default: return vec3(Separable(m, b.r, s.r), Separable(m, b.g, s.g), Separable(m, b.b, s.b));
+    }
+}
+float Hash(uint x, uint y)
+{
+    uint h = x * 374761393u + y * 668265263u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    h ^= h >> 16u;
+    return float(h & 0xFFFFFFu) / float(0x1000000);
+}
+void BlendPixel(inout vec4 d, vec3 cs, float as, uint mode, uint x, uint y)
+{
+    if (mode == Dissolve) as = Hash(x, y) < as ? 1.0 : 0.0;
+    if (as <= 0.0) return;
+    float ab = d.a;
+    vec3 mixed = cs;
+    if (ab > 0.0 && mode != Normal && mode != Dissolve && mode != PassThrough)
+    {
+        vec3 cb = d.rgb / ab;
+        mixed = (1.0 - ab) * cs + ab * clamp(BlendColors(mode, cb, cs), 0.0, 1.0);
+    }
+    d = vec4(as * mixed + (1.0 - as) * d.rgb, as + ab * (1.0 - as));
+}
+float Byte(uvec2 addr, uint i) { return float((Words(addr).W[i >> 2u] >> ((i & 3u) * 8u)) & 255u) / 255.0; }
+
+// ---- Adjustments (as ImageFilters.cpp's Adjust)
+
+vec3 ToHsl(vec3 c)
+{
+    float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
+    float l = (mx + mn) * 0.5, d = mx - mn;
+    if (d < 1e-6) return vec3(0.0, 0.0, l);
+    float s = l > 0.5 ? d / (2.0 - mx - mn) : d / (mx + mn);
+    float h;
+    if (mx == c.r) h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
+    else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
+    else h = (c.r - c.g) / d + 4.0;
+    return vec3(h / 6.0, s, l);
+}
+float HueOf(float p, float q, float t)
+{
+    t -= floor(t);
+    if (t < 1.0 / 6.0) return p + (q - p) * 6.0 * t;
+    if (t < 0.5) return q;
+    if (t < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+    return p;
+}
+vec3 FromHsl(vec3 hsl)
+{
+    float h = hsl.x - floor(hsl.x), s = hsl.y, l = hsl.z;
+    if (s <= 0.0) return vec3(l);
+    float q = l < 0.5 ? l * (1.0 + s) : l + s - l * s, p = 2.0 * l - q;
+    return vec3(HueOf(p, q, h + 1.0 / 3.0), HueOf(p, q, h), HueOf(p, q, h - 1.0 / 3.0));
+}
+float Smooth(float e0, float e1, float x)
+{
+    float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+vec3 Adjust(Op o, vec3 color)
+{
+    vec3 c = clamp(color, 0.0, 1.0);
+    Floats a = Floats(o.Aux);
+    if ((o.Flags & 2u) != 0u)
+    {
+        vec3 r;
+        for (int ch = 0; ch < 3; ++ch)
+        {
+            float x = c[ch] * 255.0;
+            int i = min(int(x), 254);
+            r[ch] = mix(a.F[ch * 256 + i], a.F[ch * 256 + i + 1], x - float(i));
+        }
+        return r;
+    }
+    float l = Luminance(c);
+    switch (o.AdjustType)
+    {
+    case 4u: // Hue/Saturation
+    {
+        vec3 hsl = ToHsl(c);
+        if (a.F[3] > 0.5) hsl = vec3(a.F[0] / 360.0, clamp(a.F[1] / 100.0, 0.0, 1.0), l);
+        else
+        {
+            hsl.x += a.F[0] / 360.0;
+            hsl.y = clamp(hsl.y * (1.0 + a.F[1] / 100.0), 0.0, 1.0);
+        }
+        c = FromHsl(hsl);
+        if (a.F[2] > 0.0) c += (1.0 - c) * (a.F[2] / 100.0);
+        else if (a.F[2] < 0.0) c *= 1.0 + a.F[2] / 100.0;
+        return clamp(c, 0.0, 1.0);
+    }
+    case 5u: // Color Balance
+    {
+        float ws = 1.0 - Smooth(0.0, 0.5, l), wh = Smooth(0.5, 1.0, l), wm = max(0.0, 1.0 - ws - wh);
+        vec3 shift = (vec3(a.F[0], a.F[1], a.F[2]) * ws + vec3(a.F[3], a.F[4], a.F[5]) * wm + vec3(a.F[6], a.F[7], a.F[8]) * wh) / 100.0 * 0.4;
+        c = clamp(c + shift, 0.0, 1.0);
+        if (a.F[9] > 0.5) c = clamp(c + (l - Luminance(c)), 0.0, 1.0);
+        return c;
+    }
+    case 6u: // Vibrance
+    {
+        float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+        c = vec3(l) + (c - l) * (1.0 + a.F[0] / 100.0 * (1.0 - sat));
+        c = vec3(l) + (c - l) * (1.0 + a.F[1] / 100.0);
+        return clamp(c, 0.0, 1.0);
+    }
+    case 7u: // Black & White
+    {
+        // The channels by size (max, mid, min) and which they are.
+        int i0 = 0, i1 = 1, i2 = 2;
+        if (c[i1] > c[i0]) { int t = i0; i0 = i1; i1 = t; }
+        if (c[i2] > c[i1]) { int t = i1; i1 = i2; i2 = t; }
+        if (c[i1] > c[i0]) { int t = i0; i0 = i1; i1 = t; }
+        float mx = c[i0], md = c[i1], mn = c[i2];
+        int primary = i0 * 2; // red 0, green 2, blue 4
+        int secondary = (i0 + i1 == 1) ? 1 : (i0 + i1 == 3) ? 3 : 5; // yellow, cyan, magenta
+        float gray = clamp(mn + (md - mn) * a.F[secondary] / 100.0 + (mx - md) * a.F[primary] / 100.0, 0.0, 1.0);
+        if (a.F[6] < 0.5) return vec3(gray);
+        vec3 hsl = ToHsl(vec3(a.F[7], a.F[8], a.F[9]));
+        return clamp(FromHsl(vec3(hsl.x, hsl.y, gray)), 0.0, 1.0);
+    }
+    case 8u: // Photo Filter
+    {
+        vec3 f = mix(c, c * vec3(a.F[0], a.F[1], a.F[2]) * 1.6, a.F[3]);
+        if (a.F[4] > 0.5) f += l - Luminance(f);
+        return clamp(f, 0.0, 1.0);
+    }
+    case 11u: return vec3(l >= a.F[0] ? 1.0 : 0.0); // Threshold
+    case 12u: return mix(vec3(a.F[0], a.F[1], a.F[2]), vec3(a.F[3], a.F[4], a.F[5]), l); // Gradient Map
+    default: return c;
+    }
+}
+
+void main()
+{
+    uvec2 local = gl_GlobalInvocationID.xy;
+    if (local.x >= uPush.AreaW || local.y >= uPush.AreaH) return;
+    uint x = uPush.X0 + local.x, y = uPush.Y0 + local.y;
+    uint i = y * uPush.Width + x;
+    Ops ops = Ops(uPush.OpsAddr);
+    vec4 stack[16];
+    int sp = 0;
+    stack[0] = vec4(0.0);
+    for (uint k = 0u; k < uPush.OpCount; ++k)
+    {
+        Op o = ops.O[k];
+        float mask = (o.Flags & 1u) != 0u ? Byte(o.Mask, i) : 1.0;
+        switch (o.Kind)
+        {
+        case 0u: // a layer
+        {
+            vec4 s = unpackUnorm4x8(Words(o.Pixels).W[i]);
+            if (s.a > 0.0) BlendPixel(stack[sp], s.rgb, s.a * o.Opacity * mask, o.Mode, x, y);
+            break;
+        }
+        case 1u: // an effect under a layer
+        {
+            float a = Byte(o.Pixels, i);
+            if (a > 0.0) BlendPixel(stack[sp], o.Color.rgb, a * o.Opacity, o.Mode, x, y);
+            break;
+        }
+        case 2u: // a group composited apart
+            ++sp;
+            stack[sp] = vec4(0.0);
+            break;
+        case 3u:
+        {
+            vec4 g = stack[sp];
+            --sp;
+            if (g.a > 0.0) BlendPixel(stack[sp], g.rgb / g.a, g.a * o.Opacity * mask, o.Mode, x, y);
+            break;
+        }
+        case 4u: // a group passing through: its layers on what is under it, faded by its opacity and mask
+            stack[sp + 1] = stack[sp];
+            ++sp;
+            break;
+        case 5u:
+        {
+            float f = o.Opacity * mask;
+            stack[sp - 1] = f < 1.0 ? mix(stack[sp - 1], stack[sp], f) : stack[sp];
+            --sp;
+            break;
+        }
+        case 6u: // an adjustment layer
+        {
+            vec4 d = stack[sp];
+            float f = o.Opacity * mask;
+            if (d.a <= 0.0 || f <= 0.0) break;
+            vec3 cb = d.rgb / d.a, cs = Adjust(o, cb);
+            bool plain = o.Mode == Normal || o.Mode == PassThrough || o.Mode == Dissolve;
+            vec3 mixed = plain ? cs : clamp(BlendColors(o.Mode, cb, cs), 0.0, 1.0);
+            stack[sp] = vec4(mix(cb, mixed, min(f, 1.0)) * d.a, d.a);
+            break;
+        }
+        }
+    }
+    vec4 d = stack[0];
+    Out(uPush.OutAddr).P[local.y * uPush.AreaW + local.x] = d.a > 0.0 ? packUnorm4x8(vec4(clamp(d.rgb / d.a, 0.0, 1.0), d.a)) : 0u;
+}
