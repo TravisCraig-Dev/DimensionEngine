@@ -1390,8 +1390,12 @@ namespace Dimension::Terrain
 
     std::vector<glm::vec3> PathCurve(const std::vector<glm::vec3>& points, int perSegment)
     {
-        if (points.size() < 2) return points;
         std::vector<glm::vec3> curve;
+        if (points.size() < 2)
+        {
+            curve.assign(points.begin(), points.end());
+            return curve;
+        }
         size_t n = points.size();
         for (size_t i = 0; i + 1 < n; ++i)
         {

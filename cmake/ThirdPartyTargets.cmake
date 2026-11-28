@@ -46,6 +46,14 @@ target_include_directories(vhacd SYSTEM INTERFACE ${vhacd_SOURCE_DIR}/include)
 add_library(opusfile STATIC
     ${opusfile_SOURCE_DIR}/src/opusfile.c ${opusfile_SOURCE_DIR}/src/info.c
     ${opusfile_SOURCE_DIR}/src/internal.c ${opusfile_SOURCE_DIR}/src/stream.c)
+# Third-party code's own warnings (GCC/Clang) are not ours to fix: opus and glslang (MSVC already shows none of theirs).
+if(NOT MSVC)
+    foreach(dep opus glslang SPIRV MachineIndependent GenericCodeGen OSDependent glslang-default-resource-limits glslang-standalone)
+        if(TARGET ${dep})
+            target_compile_options(${dep} PRIVATE -w)
+        endif()
+    endforeach()
+endif()
 target_include_directories(opusfile SYSTEM PUBLIC ${opusfile_SOURCE_DIR}/include PRIVATE ${opusfile_SOURCE_DIR}/src)
 target_link_libraries(opusfile PUBLIC Ogg::ogg Opus::opus)
 if(MSVC)

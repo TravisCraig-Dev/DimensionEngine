@@ -1423,7 +1423,7 @@ namespace Dimension::Modeling::Rig
     {
         if (!KeyHoldsShape(m, action, key, shape)) return;
         KeyCurve& c = m.Actions[(size_t)action].Keys[key].EditShapeCurve(shape);
-        c.Free &= (uint16_t)~1u;
+        c.Free &= (uint16_t)0xFFFEu; // (bit 0 off)
         c.SlopeIn[0] = c.SlopeOut[0] = 0.0f;
     }
 

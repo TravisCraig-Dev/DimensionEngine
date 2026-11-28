@@ -1499,8 +1499,8 @@ namespace Editor
         draw->AddRectFilled(ImVec2(inner.Min.x, inner.Min.y), ImVec2(gutterRight, inner.Max.y), gutterBg);
         for (int l = first; l <= last; ++l)
         {
-            char number[16];
-            std::snprintf(number, sizeof(number), "%*d", digits, l + 1);
+            char number[32];
+            std::snprintf(number, sizeof(number), "%*d", std::clamp(digits, 1, 12), l + 1);
             float y = text.y + (float)l * lineH + (lineH - fontSize) * 0.5f;
             ImU32 color = l == cursor.Line ? (light ? IM_COL32(30, 30, 30, 255) : IM_COL32(200, 200, 200, 255))
                                            : (light ? IM_COL32(140, 140, 140, 255) : IM_COL32(110, 110, 110, 255));

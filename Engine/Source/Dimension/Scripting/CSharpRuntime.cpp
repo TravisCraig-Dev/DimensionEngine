@@ -1034,17 +1034,13 @@ namespace Dimension
             void SendCollision(int phase, const Collision& c)
             {
                 if (!m_Handle) return;
-                std::vector<float> data(7 + 7 * c.Contacts.size());
-                std::memcpy(data.data(), &c.Normal, 12);
-                std::memcpy(data.data() + 3, &c.RelativeVelocity, 12);
-                data[6] = c.Impulse;
-                for (size_t i = 0; i < c.Contacts.size(); ++i)
-                {
-                    float* d = data.data() + 7 + i * 7;
-                    std::memcpy(d, &c.Contacts[i].Point, 12);
-                    std::memcpy(d + 3, &c.Contacts[i].Normal, 12);
-                    d[6] = c.Contacts[i].Separation;
-                }
+                // (normal, relative velocity, impulse; then each contact's point, normal, separation)
+                std::vector<float> data;
+                data.reserve(7 + 7 * c.Contacts.size());
+                data.insert(data.end(), { c.Normal.x, c.Normal.y, c.Normal.z, c.RelativeVelocity.x, c.RelativeVelocity.y, c.RelativeVelocity.z, c.Impulse });
+                for (const auto& contact : c.Contacts)
+                    data.insert(data.end(), { contact.Point.x, contact.Point.y, contact.Point.z, contact.Normal.x, contact.Normal.y, contact.Normal.z,
+                                              contact.Separation });
                 s_Managed.InvokeCollision(m_Handle, phase, Pack(c.Other), data.data(), (int)c.Contacts.size());
             }
             void OnTriggerEnter(Entity o) override { if (m_Handle) s_Managed.InvokeEntity(m_Handle, 2, Pack(o)); }
@@ -2424,7 +2420,7 @@ namespace Dimension
                 case 6:
                 case 7:
                 {
-                    glm::vec4 value;
+                    glm::vec4 value(0.0f);
                     if (!name || !vfx->GetProperty(name, value)) return 0.0f;
                     if (op == 6 && v) v[0] = value.x, v[1] = value.y, v[2] = value.z, v[3] = value.w;
                     return 1.0f;

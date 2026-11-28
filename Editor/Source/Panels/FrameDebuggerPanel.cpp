@@ -210,7 +210,7 @@ namespace Editor
                 bool selected = i == shown;
                 bool after = i > shown;
                 if (after) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                char label[16];
+                char label[32];
                 std::snprintf(label, sizeof(label), "%d##draw", i + 1);
                 if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_SpanAllColumns))
                 {

@@ -81,7 +81,12 @@ if (MSVC AND DIM_OPTIMIZE_DEPENDENCIES)
     set(CMAKE_CXX_FLAGS_DEBUG "/Zi /O2 /Ob2")
 endif()
 
-FetchContent_MakeAvailable(vulkan_headers vma volk glfw glm json imgui imguizmo stb cgltf ufbx box2d jolt miniaudio vhacd ogg opus opusfile msdfgen bc7enc vst3sdk glslang)
+# libogg 1.3.6 still declares CMake 3.6 as its minimum, which CMake 4 warns about on every configure (not ours to fix):
+# it is set up with its policies as of 3.10 (CMake 4's way of saying so; older CMake ignores the variable).
+set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
+FetchContent_MakeAvailable(ogg)
+unset(CMAKE_POLICY_VERSION_MINIMUM)
+FetchContent_MakeAvailable(vulkan_headers vma volk glfw glm json imgui imguizmo stb cgltf ufbx box2d jolt miniaudio vhacd opus opusfile msdfgen bc7enc vst3sdk glslang)
 
 if (MSVC AND DIM_OPTIMIZE_DEPENDENCIES)
     set(CMAKE_C_FLAGS_DEBUG "${DIM_SAVED_C_FLAGS_DEBUG}")

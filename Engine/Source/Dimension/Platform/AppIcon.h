@@ -17,8 +17,9 @@ namespace Dimension
             std::vector<uint8_t> Rgba; // 8-bit RGBA, rows top to bottom
         };
 
-        // Sizes written to icon files and executables (the shell picks the best match).
-        inline constexpr int kSizes[] = { 16, 24, 32, 48, 64, 256 };
+        // Sizes written to icon files and executables (the shell picks the best match); the same as the engine's own
+        // Dimension.ico, so a game's icon replaces every size of it.
+        inline constexpr int kSizes[] = { 16, 24, 32, 48, 64, 128, 256 };
 
         std::optional<Image> Load(const fs::path& path); // PNG, JPEG, BMP, TGA, ...
         // Fits the image into a size x size square (keeping its aspect ratio, transparent margins), filtering with

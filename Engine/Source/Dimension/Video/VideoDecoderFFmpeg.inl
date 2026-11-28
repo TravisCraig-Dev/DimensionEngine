@@ -14,7 +14,8 @@ extern "C"
 
 namespace Dimension
 {
-    namespace
+    // (named, not anonymous: VideoDecoder::Native, which every build sees, holds these)
+    namespace VideoFFmpeg
     {
         // One demuxer and decoder for one stream of a file.
         struct StreamReader
@@ -96,6 +97,7 @@ namespace Dimension
             }
         };
     }
+    using VideoFFmpeg::StreamReader;
 
     struct VideoDecoder::Native
     {

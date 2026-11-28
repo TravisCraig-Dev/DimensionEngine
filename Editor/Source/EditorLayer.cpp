@@ -3919,8 +3919,7 @@ namespace Editor
                     case AssetType::VisualEffect:
                     {
                         m_Ctx.RecordUndo();
-                        auto* meta = AssetManager::GetMetadata(h);
-                        Entity fx = scene.CreateEntity(meta ? meta->Path.stem().string() : "Visual Effect");
+                        Entity fx = scene.CreateEntity(meta->Path.stem().string()); // (meta: the dropped asset's, above)
                         scene.GetRegistry().Get<TransformComponent>(fx).Position = pos;
                         scene.GetRegistry().Emplace<VisualEffectComponent>(fx).Asset = h;
                         m_Ctx.Select(fx);

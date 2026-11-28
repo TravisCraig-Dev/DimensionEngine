@@ -295,7 +295,7 @@ namespace Editor
         bool opened;
         if (m_Renaming == e)
         {
-            opened = ImGui::TreeNodeEx("##node", flags | ImGuiTreeNodeFlags_AllowOverlap, "");
+            opened = ImGui::TreeNodeEx("##node", flags | ImGuiTreeNodeFlags_AllowOverlap); // (no text: the rename box follows)
             ImGui::SameLine();
             if (m_RenameFocus)
             {

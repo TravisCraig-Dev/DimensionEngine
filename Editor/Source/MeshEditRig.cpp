@@ -211,17 +211,17 @@ namespace Editor
                     ImVec2 h0, h1, t0, t1;
                     if (!project(headP, h0) || !project(headP + side * rh, h1) || !project(tailP, t0) || !project(tailP + side * rt, t1)) continue;
                     float sh = Dist(h0, h1), st = Dist(t0, t1);
-                    ImU32 col = ring ? IM_COL32(200, 200, 255, 70) : IM_COL32(200, 200, 255, 150);
-                    dl->AddCircle(h0, sh, col, 32, 1.0f);
-                    dl->AddCircle(t0, st, col, 32, 1.0f);
+                    ImU32 ringCol = ring ? IM_COL32(200, 200, 255, 70) : IM_COL32(200, 200, 255, 150);
+                    dl->AddCircle(h0, sh, ringCol, 32, 1.0f);
+                    dl->AddCircle(t0, st, ringCol, 32, 1.0f);
                     // The capsule's sides (perpendicular to the bone on screen).
                     ImVec2 d(t0.x - h0.x, t0.y - h0.y);
                     float dl2 = std::sqrt(d.x * d.x + d.y * d.y);
                     if (dl2 > 1e-3f)
                     {
                         ImVec2 n(-d.y / dl2, d.x / dl2);
-                        dl->AddLine(ImVec2(h0.x + n.x * sh, h0.y + n.y * sh), ImVec2(t0.x + n.x * st, t0.y + n.y * st), col, 1.0f);
-                        dl->AddLine(ImVec2(h0.x - n.x * sh, h0.y - n.y * sh), ImVec2(t0.x - n.x * st, t0.y - n.y * st), col, 1.0f);
+                        dl->AddLine(ImVec2(h0.x + n.x * sh, h0.y + n.y * sh), ImVec2(t0.x + n.x * st, t0.y + n.y * st), ringCol, 1.0f);
+                        dl->AddLine(ImVec2(h0.x - n.x * sh, h0.y - n.y * sh), ImVec2(t0.x - n.x * st, t0.y - n.y * st), ringCol, 1.0f);
                     }
                 }
             }

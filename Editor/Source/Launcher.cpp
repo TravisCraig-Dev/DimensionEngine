@@ -436,7 +436,7 @@ namespace Editor::Launcher
         spec.Window.Width = 1000;
         spec.Window.Height = 620;
         spec.Docking = false;
-        spec.MaxFrames = maxFrames;
+        spec.MaxFrames = (int)std::min<uint64_t>(maxFrames, INT32_MAX);
         spec.ScreenshotPath = screenshot;
         {
             Application app(spec);

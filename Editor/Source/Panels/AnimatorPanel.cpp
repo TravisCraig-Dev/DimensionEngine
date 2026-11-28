@@ -68,7 +68,7 @@ namespace Editor
                 ImVec2 s = toScreen({ st.Children[k].Threshold, st.Children[k].ThresholdY });
                 float w = k < (int)weights.size() ? weights[k] : 0.0f;
                 dl->AddCircleFilled(s, 4.0f + 8.0f * w, w > 0.0f ? IM_COL32(110, 200, 255, 255) : IM_COL32(120, 125, 135, 255));
-                char label[8];
+                char label[16];
                 std::snprintf(label, sizeof(label), "%d", k + 1);
                 dl->AddText(ImVec2(s.x + 7.0f + 8.0f * w, s.y - 8.0f), IM_COL32(220, 220, 225, 255), label);
                 if (ImGui::IsItemHovered() && std::hypot(mouse.x - s.x, mouse.y - s.y) < 8.0f) hovered = k;

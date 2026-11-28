@@ -2049,13 +2049,13 @@ namespace Dimension
         public bool HasProperty(string name) => Op(7, name) != 0.0f;
         /// <summary>Sets an exposed property for this object (false if the graph has none of that name).</summary>
         public new bool SetFloat(string name, float value) => Set(name, new Vector4(value));
-        public bool SetVector3(string name, Vector3 value) => Set(name, new Vector4(value, 0.0f));
-        public bool SetVector4(string name, Vector4 value) => Set(name, value);
+        public new bool SetVector3(string name, Vector3 value) => Set(name, new Vector4(value, 0.0f));
+        public new bool SetVector4(string name, Vector4 value) => Set(name, value);
         public bool SetColor(string name, Color value) => Set(name, new Vector4(value.R, value.G, value.B, value.A));
         /// <summary>An exposed property's value here (this object's, else the graph's).</summary>
         public new float GetFloat(string name) => Get(name).X;
-        public Vector3 GetVector3(string name) { var v = Get(name); return new Vector3(v.X, v.Y, v.Z); }
-        public Vector4 GetVector4(string name) => Get(name);
+        public new Vector3 GetVector3(string name) { var v = Get(name); return new Vector3(v.X, v.Y, v.Z); }
+        public new Vector4 GetVector4(string name) => Get(name);
         public Color GetColor(string name) { var v = Get(name); return new Color(v.X, v.Y, v.Z, v.W); }
     }
 
