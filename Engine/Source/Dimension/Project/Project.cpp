@@ -257,7 +257,7 @@ namespace Dimension
                           { "defaultPresets", defaultPresets },
                           { "importRules", importRules },
                           { "defaultLanguage", s_Config.DefaultLanguage },
-                          { "engineVersion", "0.3.0" } };
+                          { "engineVersion", "0.4.0" } };
         if (s_Config.InputActionsSet) j["inputActions"] = inputActions;
         // Quality: written once the project changes the defaults (projects that never do keep their file as it was).
         if (!s_Config.QualityLevels.empty() || s_Config.DefaultQuality != 3)

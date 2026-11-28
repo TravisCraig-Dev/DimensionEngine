@@ -14,7 +14,7 @@
 #include <cmath>
 
 #ifndef DIM_ENGINE_VERSION
-#define DIM_ENGINE_VERSION "0.3.0"
+#define DIM_ENGINE_VERSION "0.4.0"
 #endif
 
 namespace Editor::Launcher
