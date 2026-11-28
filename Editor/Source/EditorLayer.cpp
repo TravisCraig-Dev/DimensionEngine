@@ -1290,7 +1290,11 @@ namespace Editor
         // workspace's name and what it has open.
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         const ImGuiStyle& style = ImGui::GetStyle();
-        const float height = ImGui::GetFrameHeight() + 6.0f;
+        // The tabs' text a size up from the rest of the editor's (only theirs: tooltips and the picker keep the usual one).
+        ImFont* font = ImGui::GetFont();
+        const float fontSize = ImGui::GetFontSize() * 1.3f;
+        auto textSize = [&](const char* text) { return font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text); };
+        const float height = fontSize + style.FramePadding.y * 2.0f + 8.0f;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 0.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
         ImGui::PushStyleColor(ImGuiCol_WindowBg, style.Colors[ImGuiCol_TitleBg]);
@@ -1328,12 +1332,12 @@ namespace Editor
         };
         ImDrawList* draw = ImGui::GetWindowDrawList();
         const ImVec4 accent = UI::AccentText();
-        const float pad = 12.0f, top = 4.0f;
+        const float pad = 14.0f, top = 4.0f;
         const int pickerFor = m_WorkspacePicker ? m_WorkspacePicker : m_PickerKind;
         ImVec2 pickerAt = ImGui::GetWindowPos();
-        auto detailWidthOf = [](const Tab& tab) { return tab.Detail.empty() ? 0.0f : std::min(ImGui::CalcTextSize(tab.Detail.c_str()).x, 160.0f); };
+        auto detailWidthOf = [&](const Tab& tab) { return tab.Detail.empty() ? 0.0f : std::min(textSize(tab.Detail.c_str()).x, 200.0f); };
         auto widthOf = [&](const Tab& tab) {
-            return pad * 2.0f + ImGui::CalcTextSize(tab.Label).x + (tab.Detail.empty() ? 0.0f : 8.0f + detailWidthOf(tab));
+            return pad * 2.0f + textSize(tab.Label).x + (tab.Detail.empty() ? 0.0f : 10.0f + detailWidthOf(tab));
         };
         // Centered across the window (from the left edge when it is too narrow).
         float total = 2.0f * (float)(std::size(tabs) - 1);
@@ -1342,7 +1346,7 @@ namespace Editor
         for (const Tab& tab : tabs)
         {
             const bool selected = tab.W == current;
-            const ImVec2 labelSize = ImGui::CalcTextSize(tab.Label);
+            const ImVec2 labelSize = textSize(tab.Label);
             const float detailWidth = detailWidthOf(tab);
             const float width = widthOf(tab);
             ImGui::PushID((int)tab.W);
@@ -1354,12 +1358,12 @@ namespace Editor
             draw->AddRectFilled(min, max, bg, 5.0f, ImDrawFlags_RoundCornersTop);
             if (selected) draw->AddRectFilled(min, ImVec2(max.x, min.y + 2.0f), ImGui::GetColorU32(accent), 5.0f, ImDrawFlags_RoundCornersTop);
             const float textY = min.y + (max.y - min.y - labelSize.y) * 0.5f;
-            draw->AddText(ImVec2(min.x + pad, textY), ImGui::GetColorU32(selected ? ImGuiCol_Text : ImGuiCol_TextDisabled), tab.Label);
+            draw->AddText(font, fontSize, ImVec2(min.x + pad, textY), ImGui::GetColorU32(selected ? ImGuiCol_Text : ImGuiCol_TextDisabled), tab.Label);
             if (!tab.Detail.empty())
             {
-                const ImVec2 at(min.x + pad + labelSize.x + 8.0f, textY);
+                const ImVec2 at(min.x + pad + labelSize.x + 10.0f, textY);
                 const ImVec4 clip(at.x, min.y, at.x + detailWidth, max.y);
-                draw->AddText(nullptr, 0.0f, at, ImGui::GetColorU32(selected ? accent : style.Colors[ImGuiCol_TextDisabled]), tab.Detail.c_str(),
+                draw->AddText(font, fontSize, at, ImGui::GetColorU32(selected ? accent : style.Colors[ImGuiCol_TextDisabled]), tab.Detail.c_str(),
                               nullptr, 0.0f, &clip);
             }
             if (hovered) ImGui::SetTooltip("%s", tab.Tip.c_str());
