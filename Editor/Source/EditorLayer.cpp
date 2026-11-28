@@ -792,12 +792,18 @@ namespace Editor
             m_Ctx.RequestCloseMusic = false;
             m_Music->Close();
         }
+        if (m_WorkspaceRequest)
+        {
+            Workspace to = *m_WorkspaceRequest;
+            m_WorkspaceRequest.reset();
+            SwitchWorkspace(to);
+        }
         if (m_Ctx.RequestOpenScript)
         {
             fs::path p = *m_Ctx.RequestOpenScript;
             m_Ctx.RequestOpenScript.reset();
             if (m_Ctx.IsPlaying()) Stop();
-            m_Music->Close();
+            m_Music->Suspend(); // (stays open behind Code Mode, for the Music tab)
             m_Code->Open(p);
         }
         if (m_Ctx.RequestCloseCode)
@@ -1116,6 +1122,9 @@ namespace Editor
             return;
         }
         if (m_Ctx.IsPlaying()) Stop();
+        // The model shows in the editor's windows: Code Mode closes and the song (if one is open) is put aside.
+        m_Code->Close();
+        m_Music->Suspend();
         if (m_Ctx.InModelMode() && model == m_Ctx.ModelModeAsset()) return;
         if (m_Ctx.InStage() && !LeaveStage()) return;
         m_MeshEdit->Exit(); // (its object is in the scene being put aside)
@@ -1145,6 +1154,7 @@ namespace Editor
         }
         m_Camera.Focus(center, radius);
         m_FocusSceneView = 3; // models are edited in the Scene view
+        m_LastModel = model;
         UpdateWindowTitle();
         Log::Info("Editing model '{}' (Model Mode)", name);
     }
@@ -1181,7 +1191,176 @@ namespace Editor
     void EditorLayer::OpenMusicMode(AssetHandle song)
     {
         if (m_Ctx.IsPlaying()) Stop();
-        if (!m_Music->Open(song)) Log::Error("Could not open the song '{}'", AssetManager::GetDisplayName(song));
+        // The song put aside by a workspace tab comes back as it was (undo history and all); another one is opened.
+        bool ok = true;
+        if (m_Music->IsActive() && m_Music->GetSong() == song) m_Music->Resume();
+        else ok = m_Music->Open(song);
+        if (!ok) Log::Error("Could not open the song '{}'", AssetManager::GetDisplayName(song));
+        else m_Code->Close();
+    }
+
+    EditorLayer::Workspace EditorLayer::CurrentWorkspace() const
+    {
+        if (m_Code->IsActive()) return Workspace::Code;
+        if (m_Music->IsShown()) return Workspace::Music;
+        if (m_Ctx.InModelMode()) return Workspace::Model;
+        return Workspace::Scene;
+    }
+
+    void EditorLayer::SwitchWorkspace(Workspace to)
+    {
+        switch (to)
+        {
+        case Workspace::Scene:
+            m_Code->Close(); // (saves the scripts; they open again with the Code tab)
+            m_Music->Suspend();
+            if (m_Ctx.InModelMode()) LeaveStage();
+            break;
+        case Workspace::Model:
+            if (m_Ctx.InModelMode())
+            {
+                m_Code->Close();
+                m_Music->Suspend();
+            }
+            else if (const AssetMetadata* meta = AssetManager::GetMetadata(m_LastModel); meta && meta->Path.extension() == ".dmodel")
+                OpenModelMode(m_LastModel);
+            else
+                m_WorkspacePicker = (int)Workspace::Model; // which model?
+            break;
+        case Workspace::Music:
+            if (m_Music->IsActive() || (m_Music->GetSong().IsValid() && AssetManager::GetMetadata(m_Music->GetSong())))
+                OpenMusicMode(m_Music->GetSong());
+            else
+                m_WorkspacePicker = (int)Workspace::Music; // which song?
+            break;
+        case Workspace::Code: m_Ctx.RequestOpenScript = fs::path(); break; // (handled next, like Scripts > Code Mode)
+        }
+    }
+
+    void EditorLayer::DrawWorkspaceTabs()
+    {
+        // A strip of tabs above everything (the menu bar, or Music Mode's and Code Mode's windows): each shows the
+        // workspace's name and what it has open.
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float height = ImGui::GetFrameHeight() + 6.0f;
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 0.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, style.Colors[ImGuiCol_TitleBg]);
+        bool open = ImGui::BeginViewportSideBar("##WorkspaceTabs", viewport, ImGuiDir_Up, height,
+                                                ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav);
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar(2);
+        if (!open)
+        {
+            ImGui::End();
+            return;
+        }
+        const Workspace current = CurrentWorkspace();
+        auto name = [](AssetHandle h) { return h.IsValid() && AssetManager::GetMetadata(h) ? AssetManager::GetDisplayName(h) : std::string(); };
+        struct Tab
+        {
+            Workspace W;
+            const char* Label;
+            std::string Detail;
+            std::string Tip;
+        };
+        const AssetHandle model = m_Ctx.InModelMode() ? m_Ctx.ModelModeAsset() : m_LastModel;
+        const std::string modelName = name(model), songName = name(m_Music->GetSong());
+        const Tab tabs[] = {
+            { Workspace::Scene, "Scene", m_Ctx.InStage() ? m_Ctx.StageSceneName() : m_Ctx.EditorScene ? m_Ctx.EditorScene->GetName() + (m_Ctx.Dirty ? "*" : "") : std::string(),
+              "Scene Editor: the scene, its objects and the editor's windows" },
+            { Workspace::Model, "Model", modelName,
+              modelName.empty() ? "Model Mode: choose a model to edit" : "Model Mode: the model '" + modelName + "' in Edit Mode" },
+            { Workspace::Music, "Music", songName,
+              songName.empty() ? "Music Mode: choose a song to edit" : "Music Mode: the song '" + songName + "'" },
+            { Workspace::Code, "Code", std::string(),
+              "Code Mode: the scripts, with live errors, completion and the debugger (" + Shortcuts::Label("file.codeMode") + ")" },
+        };
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const ImVec4 accent = UI::AccentText();
+        const float pad = 12.0f, top = 4.0f;
+        const int pickerFor = m_WorkspacePicker ? m_WorkspacePicker : m_PickerKind;
+        ImVec2 pickerAt = ImGui::GetWindowPos();
+        auto detailWidthOf = [](const Tab& tab) { return tab.Detail.empty() ? 0.0f : std::min(ImGui::CalcTextSize(tab.Detail.c_str()).x, 160.0f); };
+        auto widthOf = [&](const Tab& tab) {
+            return pad * 2.0f + ImGui::CalcTextSize(tab.Label).x + (tab.Detail.empty() ? 0.0f : 8.0f + detailWidthOf(tab));
+        };
+        // Centered across the window (from the left edge when it is too narrow).
+        float total = 2.0f * (float)(std::size(tabs) - 1);
+        for (const Tab& tab : tabs) total += widthOf(tab);
+        ImGui::SetCursorPos(ImVec2(std::max(6.0f, (ImGui::GetWindowWidth() - total) * 0.5f), top));
+        for (const Tab& tab : tabs)
+        {
+            const bool selected = tab.W == current;
+            const ImVec2 labelSize = ImGui::CalcTextSize(tab.Label);
+            const float detailWidth = detailWidthOf(tab);
+            const float width = widthOf(tab);
+            ImGui::PushID((int)tab.W);
+            const bool clicked = ImGui::InvisibleButton("##tab", ImVec2(width, height - top));
+            const bool hovered = ImGui::IsItemHovered();
+            ImGui::PopID();
+            const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+            const ImU32 bg = ImGui::GetColorU32(selected ? ImGuiCol_MenuBarBg : hovered ? ImGuiCol_TabHovered : ImGuiCol_Tab);
+            draw->AddRectFilled(min, max, bg, 5.0f, ImDrawFlags_RoundCornersTop);
+            if (selected) draw->AddRectFilled(min, ImVec2(max.x, min.y + 2.0f), ImGui::GetColorU32(accent), 5.0f, ImDrawFlags_RoundCornersTop);
+            const float textY = min.y + (max.y - min.y - labelSize.y) * 0.5f;
+            draw->AddText(ImVec2(min.x + pad, textY), ImGui::GetColorU32(selected ? ImGuiCol_Text : ImGuiCol_TextDisabled), tab.Label);
+            if (!tab.Detail.empty())
+            {
+                const ImVec2 at(min.x + pad + labelSize.x + 8.0f, textY);
+                const ImVec4 clip(at.x, min.y, at.x + detailWidth, max.y);
+                draw->AddText(nullptr, 0.0f, at, ImGui::GetColorU32(selected ? accent : style.Colors[ImGuiCol_TextDisabled]), tab.Detail.c_str(),
+                              nullptr, 0.0f, &clip);
+            }
+            if (hovered) ImGui::SetTooltip("%s", tab.Tip.c_str());
+            if ((int)tab.W == pickerFor) pickerAt = ImVec2(min.x, max.y);
+            if (clicked && !selected) m_WorkspaceRequest = tab.W;
+            ImGui::SameLine(0.0f, 2.0f);
+        }
+
+        // No model or song to reopen: the project's ones to choose from (or a new one).
+        if (m_WorkspacePicker)
+        {
+            m_PickerKind = m_WorkspacePicker;
+            m_WorkspacePicker = 0;
+            ImGui::OpenPopup("##workspacePicker");
+        }
+        ImGui::SetNextWindowPos(pickerAt, ImGuiCond_Appearing);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(220.0f, 0.0f), ImVec2(420.0f, 440.0f));
+        if (ImGui::BeginPopup("##workspacePicker"))
+        {
+            const bool models = m_PickerKind == (int)Workspace::Model;
+            ImGui::TextDisabled(models ? "Edit a model" : "Edit a song");
+            ImGui::Separator();
+            std::vector<std::pair<std::string, AssetHandle>> list;
+            for (AssetHandle h : AssetManager::GetAssetsOfType(models ? AssetType::Mesh : AssetType::Song))
+                if (const AssetMetadata* meta = AssetManager::GetMetadata(h); meta && (!models || meta->Path.extension() == ".dmodel"))
+                    list.emplace_back(AssetManager::GetDisplayName(h), h);
+            std::sort(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            for (const auto& [label, h] : list)
+            {
+                ImGui::PushID((int)(uint64_t)h);
+                if (ImGui::Selectable(label.c_str()))
+                {
+                    if (models) m_Ctx.RequestOpenModel = h;
+                    else m_Ctx.RequestOpenSong = h;
+                }
+                ImGui::PopID();
+            }
+            if (list.empty()) ImGui::TextDisabled(models ? "No models in the project yet" : "No songs in the project yet");
+            ImGui::Separator();
+            if (ImGui::Selectable(models ? "New Model..." : "New Song...", false, models && m_Ctx.IsPlaying() ? ImGuiSelectableFlags_Disabled : 0))
+            {
+                // (the New window is one of the editor's)
+                m_Code->Close();
+                m_Music->Suspend();
+                if (models) m_ShowNewModel = true;
+                else m_ShowNewSong = true;
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::End();
     }
 
     void EditorLayer::DrawNewSongWindow()
@@ -3060,7 +3239,8 @@ namespace Editor
             }
         }
 
-        if (m_Music->IsActive())
+        DrawWorkspaceTabs();
+        if (m_Music->IsShown())
         {
             m_Music->OnImGui();
             InjectInput(); // (automation)

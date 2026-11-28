@@ -23,6 +23,12 @@ namespace Editor
         ~MusicMode();
 
         bool IsActive() const { return m_Active; }
+        // Open and drawn (not put aside behind another workspace tab).
+        bool IsShown() const { return m_Active && !m_Suspended; }
+        // Put aside while another workspace tab is shown: playback stops, MIDI input closes and the song is saved, but it
+        // stays open (with its undo history) for Resume.
+        void Suspend();
+        void Resume();
         // Whether the editor should keep drawing at full rate (playing, recording, or a plug-in's editor window open:
         // their input does not reach the editor's window, so it would look idle).
         bool WantsFrames() const;
@@ -106,6 +112,7 @@ namespace Editor
 
         EditorContext& m_Ctx;
         bool m_Active = false;
+        bool m_Suspended = false;
         AssetHandle m_Asset = AssetHandle::None();
         fs::path m_File;
         Dimension::Music::Song m_Song;

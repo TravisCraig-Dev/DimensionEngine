@@ -264,6 +264,15 @@ namespace Editor
         std::string m_NewSongName = "New Song";
         void DrawNewSongWindow();
         void OpenMusicMode(AssetHandle song);
+        // Workspace tabs (the strip above the menu bar): the scene editor, Model Mode, Music Mode and Code Mode. Leaving
+        // Music Mode or Code Mode by a tab keeps the song or the scripts open behind it; Model Mode leaves its stage.
+        enum class Workspace { Scene, Model, Music, Code };
+        Workspace CurrentWorkspace() const;
+        void DrawWorkspaceTabs();
+        void SwitchWorkspace(Workspace to); // (from the update, outside the windows)
+        std::optional<Workspace> m_WorkspaceRequest;
+        AssetHandle m_LastModel = AssetHandle::None(); // reopened by the Model tab
+        int m_WorkspacePicker = 0, m_PickerKind = 0;   // 1 = choose a model, 2 = choose a song (none to reopen)
         Scope<PackagesPanel> m_Packages;
         Scope<TestRunnerPanel> m_TestRunner;
         Scope<NavigationPanel> m_Navigation;

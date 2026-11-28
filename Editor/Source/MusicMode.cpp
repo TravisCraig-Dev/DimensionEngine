@@ -69,6 +69,7 @@ namespace Editor
         m_Asset = song;
         m_File = file;
         m_Active = true;
+        m_Suspended = false;
         m_Dirty = m_Unsaved = false;
         m_Undo.clear();
         m_Redo.clear();
@@ -115,8 +116,29 @@ namespace Editor
         m_ParamCache.clear();
         m_HasEditorCache.clear();
         m_Active = false;
+        m_Suspended = false;
         m_TypedNotes.clear();
         m_PianoNote = -1;
+    }
+
+    void MusicMode::Suspend()
+    {
+        if (!m_Active || m_Suspended) return;
+        StopPlayback();
+        StopMidi(); // (ends a take in progress)
+        for (auto& [imguiKey, note] : m_TypedNotes) Preview(m_SelectedChannel, note, false);
+        m_TypedNotes.clear();
+        if (m_PianoNote >= 0) Preview(m_SelectedChannel, m_PianoNote, false);
+        m_PianoNote = -1;
+        if (m_Unsaved) Save();
+        m_Suspended = true;
+    }
+
+    void MusicMode::Resume()
+    {
+        if (!m_Active || !m_Suspended) return;
+        m_Suspended = false;
+        StartMidi();
     }
 
     void MusicMode::Record()
@@ -364,7 +386,7 @@ namespace Editor
 
     bool MusicMode::WantsFrames() const
     {
-        return m_Active && ((m_Player && m_Player->IsPlaying()) || m_Taking || Plugins::AnyEditorOpen());
+        return m_Active && !m_Suspended && ((m_Player && m_Player->IsPlaying()) || m_Taking || Plugins::AnyEditorOpen());
     }
 
     void MusicMode::OnImGui()
